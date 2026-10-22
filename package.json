@@ -24,6 +24,11 @@
         "command": "lanpair.hello",
         "title": "Hello",
         "category": "LanPair"
+      },
+      {
+        "command": "lanpair.debugMirror",
+        "title": "Debug: Mirror Active Editor (toggle)",
+        "category": "LanPair"
       }
     ]
   },
