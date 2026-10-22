@@ -1,0 +1,54 @@
+{
+  "name": "lanpair",
+  "displayName": "LanPair",
+  "description": "Real-time pair editing over the local network (Yjs CRDT, no cloud).",
+  "version": "0.0.1",
+  "publisher": "lanpair",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://example.invalid/lanpair.git"
+  },
+  "engines": {
+    "vscode": "^1.107.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "lanpair.hello",
+        "title": "Hello",
+        "category": "LanPair"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "package": "npm run typecheck && node esbuild.mjs --production && vsce package --no-dependencies --out lanpair.vsix"
+  },
+  "dependencies": {
+    "bonjour-service": "1.4.4",
+    "lib0": "0.2.119",
+    "ws": "8.22.0",
+    "y-protocols": "1.0.7",
+    "yjs": "13.6.33"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/vscode": "1.107.0",
+    "@types/ws": "8.18.2",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "4.0.0",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}
