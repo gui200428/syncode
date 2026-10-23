@@ -3,13 +3,14 @@ import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { askIdentity, lanAddresses, readConfig } from '../config';
+import { advertise, browse, type DiscoveredSession } from '../discovery/mdns';
 import { remoteUri, SCHEME, type LanPairFs } from '../guest/LanPairFs';
 import { JoinError, SessionClient } from '../guest/SessionClient';
 import { HostDocuments } from '../host/HostDocuments';
 import { SessionServer } from '../host/SessionServer';
 import { WorkspaceIndex } from '../host/WorkspaceIndex';
 import type { Logger } from '../log';
-import type { FsChange } from '../protocol';
+import { PROTOCOL_VERSION, type FsChange } from '../protocol';
 import { normalizeDocPath } from '../sync/DocRegistry';
 import { RemoteCursors, safeColor, type DocLocator } from '../sync/RemoteCursors';
 import type { StatusBar } from '../ui/StatusBar';
@@ -175,6 +176,13 @@ export class SessionManager implements vscode.Disposable {
         this.watchFolder(folder, index, server),
       ],
     };
+    if (config.advertise) {
+      const ad = advertise(
+        { sessionId, hostName: config.displayName, rootName: path.basename(root), port: server.port },
+        (m) => this.log.appendLine(`[mdns] ${m}`),
+      );
+      this.state.disposables.push(new vscode.Disposable(() => ad.dispose()));
+    }
     updateStatus();
     this.log.appendLine(`[host] sharing ${root} on port ${info.port} (session ${sessionId})`);
 
@@ -532,16 +540,68 @@ export class SessionManager implements vscode.Disposable {
     this.stop();
   }
 
-  private async askAddress(): Promise<{ host: string; port: number } | undefined> {
-    const input = await vscode.window.showInputBox({
-      title: 'LanPair: Join Session',
-      prompt: "Host address shown in the host's notification",
-      placeHolder: '192.168.0.10:45123',
-      value: this.context.globalState.get<string>(LAST_ADDRESS_KEY),
-      ignoreFocusOut: true,
-      validateInput: (v) => (parseAddress(v) ? undefined : 'Use IP:port, for example 192.168.0.10:45123'),
+  /** QuickPick with sessions found on the LAN (live) plus manual entry. */
+  private askAddress(): Promise<{ host: string; port: number } | undefined> {
+    type Item = vscode.QuickPickItem & { session?: DiscoveredSession; manual?: boolean };
+    const manual: Item = {
+      label: '$(edit) Enter address manually…',
+      description: this.context.globalState.get<string>(LAST_ADDRESS_KEY),
+      manual: true,
+      alwaysShow: true,
+    };
+    const pick = vscode.window.createQuickPick<Item>();
+    pick.title = 'LanPair: Join Session';
+    pick.placeholder = 'Looking for sessions on your network…';
+    pick.busy = true;
+    pick.ignoreFocusOut = true;
+    pick.items = [manual];
+    const browser = browse(
+      (sessions) => {
+        const found: Item[] = sessions.map((s) => ({
+          label: `$(broadcast) ${s.hostName}`,
+          description: `${s.rootName} — ${s.address}:${s.port}`,
+          detail: s.protocol === PROTOCOL_VERSION ? undefined : '$(warning) Different LanPair version: update both machines',
+          session: s,
+        }));
+        pick.items = [...found, manual];
+        pick.placeholder = found.length > 0 ? 'Pick a session or enter an address' : 'Looking for sessions on your network…';
+      },
+      (m) => this.log.appendLine(`[mdns] ${m}`),
+    );
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (value: { host: string; port: number } | undefined) => {
+        if (done) return;
+        done = true;
+        browser.dispose();
+        pick.dispose();
+        resolve(value);
+      };
+      pick.onDidAccept(async () => {
+        const item = pick.selectedItems[0];
+        if (item?.session) {
+          finish({ host: item.session.address, port: item.session.port });
+        } else if (item?.manual) {
+          pick.hide();
+        }
+      });
+      pick.onDidHide(async () => {
+        if (done) return;
+        const item = pick.selectedItems[0];
+        if (!item?.manual) return finish(undefined);
+        browser.dispose();
+        const input = await vscode.window.showInputBox({
+          title: 'LanPair: Join Session',
+          prompt: "Host address shown in the host's notification",
+          placeHolder: '192.168.0.10:45123',
+          value: this.context.globalState.get<string>(LAST_ADDRESS_KEY),
+          ignoreFocusOut: true,
+          validateInput: (v) => (parseAddress(v) ? undefined : 'Use IP:port, for example 192.168.0.10:45123'),
+        });
+        finish(input ? parseAddress(input) : undefined);
+      });
+      pick.show();
     });
-    return input ? parseAddress(input) : undefined;
   }
 
   private joinAddress(info: HostingInfo): string {

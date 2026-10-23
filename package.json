@@ -130,6 +130,11 @@
           ],
           "default": "always",
           "description": "When to show participants' names above their cursors."
+        },
+        "lanpair.advertise": {
+          "type": "boolean",
+          "default": true,
+          "description": "Announce hosted sessions on the local network (mDNS) so guests can pick them in Join Session."
         }
       }
     }
