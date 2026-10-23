@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { RemoteError } from '../protocol';
+import { RemoteError, type FileKind, type FileStatResult } from '../protocol';
 import { DocRegistry, type DocEntry } from '../sync/DocRegistry';
 import { EditorBinding } from '../sync/EditorBinding';
 import { bindableDocument } from '../sync/VscodeDocument';
@@ -22,6 +22,9 @@ export class HostDocuments implements HostDocs, vscode.Disposable {
   private readonly bound = new Map<string, Bound>();
   private readonly realPaths = new Map<string, string>();
   private readonly subscriptions: vscode.Disposable[] = [];
+  private readonly bindingsEmitter = new vscode.EventEmitter<void>();
+  /** Fires when a host document starts or stops being shared. */
+  readonly onDidChangeBindings = this.bindingsEmitter.event;
 
   constructor(
     private readonly index: WorkspaceIndex,
@@ -58,10 +61,34 @@ export class HostDocuments implements HostDocs, vscode.Disposable {
     }
   }
 
+  stat(path: string): Promise<FileStatResult> {
+    return this.index.stat(path);
+  }
+
+  list(path: string): Promise<Array<[string, FileKind]>> {
+    return this.index.list(path);
+  }
+
+  read(path: string): Promise<Uint8Array> {
+    return this.index.readRaw(path);
+  }
+
+  /** The TextDocument bound to a shared doc, if any. */
+  boundDocument(path: string): vscode.TextDocument | undefined {
+    return this.bound.get(path)?.document;
+  }
+
+  /** Binding and docId for a host TextDocument that guests have open. */
+  bindingFor(document: vscode.TextDocument): { path: string; binding: EditorBinding } | undefined {
+    for (const [path, b] of this.bound) if (b.document === document) return { path, binding: b.binding };
+    return undefined;
+  }
+
   dispose(): void {
     for (const s of this.subscriptions.splice(0)) s.dispose();
     for (const path of [...this.bound.keys()]) this.unbind(path);
     this.registry.dispose();
+    this.bindingsEmitter.dispose();
   }
 
   private bind(path: string, document: vscode.TextDocument, entry: DocEntry): void {
@@ -69,11 +96,12 @@ export class HostDocuments implements HostDocs, vscode.Disposable {
       log: (m) => this.log(`[${path}] ${m}`),
     });
     this.bound.set(path, { document, binding });
+    this.bindingsEmitter.fire();
   }
 
   private unbind(path: string): void {
     this.bound.get(path)?.binding.dispose();
-    this.bound.delete(path);
+    if (this.bound.delete(path)) this.bindingsEmitter.fire();
     if (!this.registry.get(path)) this.realPaths.delete(path);
   }
 

@@ -9,6 +9,8 @@ import {
   isIdentity,
   toEdits,
   transform,
+  transformIndex,
+  transformIndexBack,
 } from './delta';
 import type { BindableDocument, Disposable } from './document';
 
@@ -98,11 +100,25 @@ export class EditorBinding implements Disposable {
     return true;
   }
 
+  /** Delta that turns the current editor text into the current Y.Text. */
+  private mapping(): Delta {
+    const f = this.inFlight;
+    return f && !f.echoSeen && !f.superseded ? compose(f.delta, this.pending) : this.pending;
+  }
+
+  /** Maps a (normalized) editor offset to a Y.Text index, e.g. to publish a cursor. */
+  toYIndex(docOffset: number): number {
+    return transformIndex(this.mapping(), docOffset);
+  }
+
+  /** Maps a Y.Text index to a (normalized) editor offset, e.g. to render a remote cursor. */
+  toDocOffset(yIndex: number): number {
+    return transformIndexBack(this.mapping(), yIndex);
+  }
+
   /** Verifies the invariant; used by tests and as a safety net. */
   isConsistent(): boolean {
-    const f = this.inFlight;
-    const mapping = f && !f.echoSeen && !f.superseded ? compose(f.delta, this.pending) : this.pending;
-    return applyDelta(this.document.getText(), mapping) === this.ytext.toString();
+    return applyDelta(this.document.getText(), this.mapping()) === this.ytext.toString();
   }
 
   dispose(): void {

@@ -11,8 +11,13 @@ let mirror: vscode.Disposable | undefined;
 export interface LanPairApi {
   recentLogLines(): readonly string[];
   startHosting(pin: string): Promise<HostingInfo | undefined>;
+  /** Joins without reopening the window on the host's folder. */
   join(host: string, port: number, pin: string): Promise<boolean>;
   openRemoteFile(path: string): Promise<vscode.TextEditor | undefined>;
+  participants(): Array<{ clientId: number; name: string; file: string | null }>;
+  follow(clientId: number | undefined): void;
+  remoteHeads(): Array<{ name: string; uri: string; line: number; character: number }>;
+  sessionKind(): string;
   stop(): void;
 }
 
@@ -30,7 +35,8 @@ export function activate(context: vscode.ExtensionContext): LanPairApi {
     sessions,
     vscode.workspace.registerFileSystemProvider(SCHEME, fs, { isCaseSensitive: true }),
     command('lanpair.startHosting', () => sessions.startHosting()),
-    command('lanpair.stopSession', () => sessions.stop()),
+    command('lanpair.stopSession', () => sessions.leave()),
+    command('lanpair.followParticipant', () => sessions.followParticipant()),
     command('lanpair.joinSession', () => sessions.join()),
     command('lanpair.copyJoinInfo', () => sessions.copyJoinInfo()),
     command('lanpair.openRemoteFile', () => sessions.openRemoteFile()),
@@ -50,11 +56,18 @@ export function activate(context: vscode.ExtensionContext): LanPairApi {
     new vscode.Disposable(() => mirror?.dispose()),
   );
 
+  void sessions.resumeFromWorkspace();
+
   return {
     recentLogLines: () => output.recentLines(),
     startHosting: (pin) => sessions.startHosting({ pin }),
-    join: (host, port, pin) => sessions.join({ host, port, pin }),
+    join: (host, port, pin) => sessions.join({ host, port, pin }, { inPlace: true }),
     openRemoteFile: (path) => sessions.openRemoteFile(path),
+    participants: () =>
+      (sessions.cursors?.participants() ?? []).map((p) => ({ clientId: p.clientId, name: p.user.name, file: p.file })),
+    follow: (clientId) => sessions.cursors?.follow(clientId),
+    remoteHeads: () => sessions.cursors?.remoteHeads() ?? [],
+    sessionKind: () => sessions.kind,
     stop: () => sessions.stop(),
   };
 }

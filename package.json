@@ -18,7 +18,8 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onFileSystem:lanpair"
+    "onFileSystem:lanpair",
+    "onStartupFinished"
   ],
   "contributes": {
     "commands": [
@@ -40,6 +41,11 @@
       {
         "command": "lanpair.copyJoinInfo",
         "title": "Copy Join Info",
+        "category": "LanPair"
+      },
+      {
+        "command": "lanpair.followParticipant",
+        "title": "Follow Participant",
         "category": "LanPair"
       },
       {

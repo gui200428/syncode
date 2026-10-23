@@ -4,7 +4,7 @@ Real-time pair editing for Antigravity / Code OSS over the local network.
 Two people on the same LAN edit the same files simultaneously and see each
 other's cursors. Built on Yjs (CRDT); no cloud server, no accounts, no internet.
 
-Status: Phase 2 (one file at a time over the LAN; file tree and cursors come in Phase 3). See `PROMPT-claude-code-lanpair.md` for the roadmap.
+Status: Phase 3 (file tree, live editing, remote cursors, follow). Discovery/reconnection come in Phase 4. See `PROMPT-claude-code-lanpair.md` for the roadmap.
 
 ## Development
 
@@ -37,14 +37,22 @@ Manual check: open any file and run **LanPair: Debug: Mirror Active Editor
 20–250 ms of artificial latency. Type in both at once; they must never diverge.
 Binding warnings go to the "LanPair" output channel.
 
-## Using it (Phase 2)
+## Using it
 
 Host: open the folder to share, run **LanPair: Start Hosting**. A notification
 shows `IP:port` and a 6-digit PIN (also in the status bar; **Copy Join Info**).
 
-Guest: run **LanPair: Join Session…**, type `IP:port` and the PIN, then
-**LanPair: Open Remote File…** with a path relative to the shared folder
-(e.g. `src/index.ts`). Ctrl+S on the guest saves the file on the host.
+Guest: run **LanPair: Join Session…**, type `IP:port` and the PIN. The host's
+folder opens as `lanpair://<session>/` (in this window if it is empty,
+otherwise in a new one) and the Explorer shows the host's files. Text files
+are edited live; binary or oversized files open read-only. Ctrl+S on the guest
+saves the file on the host (the host's save participants, such as format on
+save, run there too).
+
+Both sides see each other's cursors and selections (name label for a few
+seconds after the cursor moves; hover a cursor for the name).
+**LanPair: Follow Participant** follows someone's file and cursor until you
+move your own cursor. Click the status bar item for the session menu.
 
 Protocol: one WebSocket per guest, binary frames `{type, docId, payload}`
 (`src/protocol.ts`, `PROTOCOL_VERSION` checked in the handshake). Nothing is
@@ -56,8 +64,12 @@ symbolic links leaving the shared folder (`src/host/WorkspaceIndex.ts`).
 
 - Undo/redo uses the editor's native stack, which also undoes edits made by
   the other participant. `Y.UndoManager` for local-only undo is planned for Phase 4.
-- Phase 2: the guest opens files by path (no file tree yet), no remote cursors,
-  no mDNS discovery and no reconnection.
+- No mDNS discovery and no automatic reconnection after a dropped connection yet (Phase 4).
+  Reopening the window reconnects using the join info kept in SecretStorage.
+- `.gitignore` is not applied yet (only `lanpair.exclude`); Phase 4.
+- The guest cannot create, rename or delete files.
+- The guest window applies the host's `.vscode/settings.json` like any workspace
+  folder; only join sessions of people you trust.
 - On the guest, remote edits mark the editor as dirty; saving (Ctrl+S) is
   how it becomes clean again.
 - Only Y.Text content is synced; embeds/attributes are not supported (not needed for code).

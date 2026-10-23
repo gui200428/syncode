@@ -2,12 +2,15 @@ import { randomBytes, randomInt } from 'node:crypto';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { lanAddresses, readConfig } from '../config';
-import { remoteUri, type LanPairFs } from '../guest/LanPairFs';
+import { remoteUri, SCHEME, type LanPairFs } from '../guest/LanPairFs';
 import { JoinError, SessionClient } from '../guest/SessionClient';
 import { HostDocuments } from '../host/HostDocuments';
 import { SessionServer } from '../host/SessionServer';
 import { WorkspaceIndex } from '../host/WorkspaceIndex';
 import type { Logger } from '../log';
+import type { FsChange } from '../protocol';
+import { normalizeDocPath } from '../sync/DocRegistry';
+import { RemoteCursors, safeColor, type DocLocator } from '../sync/RemoteCursors';
 import type { StatusBar } from '../ui/StatusBar';
 
 export interface HostingInfo {
@@ -17,18 +20,37 @@ export interface HostingInfo {
   sessionId: string;
 }
 
+interface JoinTarget {
+  host: string;
+  port: number;
+  pin: string;
+}
+
 type State =
   | { kind: 'idle' }
-  | { kind: 'hosting'; server: SessionServer; docs: HostDocuments; info: HostingInfo; disposables: vscode.Disposable[] }
-  | { kind: 'guest'; client: SessionClient; disposables: vscode.Disposable[] };
+  | { kind: 'connecting' }
+  | {
+      kind: 'hosting';
+      server: SessionServer;
+      docs: HostDocuments;
+      info: HostingInfo;
+      cursors: RemoteCursors;
+      disposables: vscode.Disposable[];
+    }
+  | { kind: 'guest'; client: SessionClient; cursors: RemoteCursors; disposables: vscode.Disposable[] };
 
 const LAST_ADDRESS_KEY = 'lanpair.lastAddress';
+const secretKey = (sessionId: string) => `lanpair.join.${sessionId}`;
 
 export function parseAddress(input: string): { host: string; port: number } | undefined {
   const m = /^\s*\[?([^\]\s]+?)\]?:(\d{1,5})\s*$/.exec(input);
   if (!m) return undefined;
   const port = Number(m[2]);
   return port > 0 && port < 65536 ? { host: m[1]!, port } : undefined;
+}
+
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 /** Owns the current session (host or guest) and implements the commands. */
@@ -50,9 +72,11 @@ export class SessionManager implements vscode.Disposable {
     return this.state.kind === 'hosting' ? this.state.info : undefined;
   }
 
-  get guestClient(): SessionClient | undefined {
-    return this.state.kind === 'guest' ? this.state.client : undefined;
+  get cursors(): RemoteCursors | undefined {
+    return this.state.kind === 'hosting' || this.state.kind === 'guest' ? this.state.cursors : undefined;
   }
+
+  // Hosting
 
   async startHosting(options: { pin?: string } = {}): Promise<HostingInfo | undefined> {
     if (this.state.kind !== 'idle') {
@@ -67,9 +91,8 @@ export class SessionManager implements vscode.Disposable {
     const config = readConfig();
     const pin = options.pin ?? randomInt(0, 1_000_000).toString().padStart(6, '0');
     const sessionId = randomBytes(4).toString('hex');
-    const docs = new HostDocuments(new WorkspaceIndex(folder.uri.fsPath, { maxFileBytes: config.maxFileBytes }), (m) =>
-      this.log.appendLine(`[host] ${m}`),
-    );
+    const index = new WorkspaceIndex(folder.uri.fsPath, { maxFileBytes: config.maxFileBytes, exclude: config.exclude });
+    const docs = new HostDocuments(index, (m) => this.log.appendLine(`[host] ${m}`));
     let server: SessionServer;
     try {
       server = await SessionServer.start({
@@ -79,33 +102,55 @@ export class SessionManager implements vscode.Disposable {
         hostName: config.displayName,
         rootName: path.basename(folder.uri.fsPath),
         docs,
+        awareness: docs.registry.awareness,
         log: (m) => this.log.appendLine(`[server] ${m}`),
       });
     } catch (err) {
       docs.dispose();
-      const message = err instanceof Error ? err.message : String(err);
-      void vscode.window.showErrorMessage(`LanPair: could not open port ${config.port}: ${message}`);
+      void vscode.window.showErrorMessage(`LanPair: could not open port ${config.port}: ${message(err)}`);
       return undefined;
     }
+
+    const root = folder.uri.fsPath;
+    const locator: DocLocator = {
+      docIdFor: (document) => {
+        if (document.uri.scheme !== 'file') return undefined;
+        const bound = docs.bindingFor(document);
+        if (bound) return bound.path;
+        const rel = path.relative(root, document.uri.fsPath);
+        return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? normalizeDocPath(rel) : undefined;
+      },
+      bindingFor: (document) => docs.bindingFor(document)?.binding,
+      uriFor: (docId) => vscode.Uri.joinPath(folder.uri, docId),
+    };
+    const cursors = new RemoteCursors(docs.registry.awareness, locator, {
+      name: config.displayName,
+      color: safeColor(config.color),
+    });
     const info: HostingInfo = { port: server.port, pin, addresses: lanAddresses(), sessionId };
-    const updateStatus = () => this.status.update({ kind: 'hosting', pin, guests: server.guests.length });
+    const updateStatus = () =>
+      this.status.update({ kind: 'hosting', pin, guests: server.guests.length, following: cursors.followed?.user.name });
     const guestsChanged = server.onDidChangeGuests(updateStatus);
     this.state = {
       kind: 'hosting',
       server,
       docs,
       info,
-      disposables: [new vscode.Disposable(() => guestsChanged.dispose())],
+      cursors,
+      disposables: [
+        new vscode.Disposable(() => guestsChanged.dispose()),
+        docs.onDidChangeBindings(() => cursors.refresh()),
+        cursors.onDidChangeFollow(updateStatus),
+        this.watchFolder(folder, index, server),
+      ],
     };
     updateStatus();
-    this.log.appendLine(`[host] sharing ${folder.uri.fsPath} on port ${info.port} (session ${sessionId})`);
+    this.log.appendLine(`[host] sharing ${root} on port ${info.port} (session ${sessionId})`);
 
     if (!options.pin) {
-      const action = await vscode.window.showInformationMessage(
-        `LanPair: hosting on ${this.joinAddress(info)} — PIN ${pin}`,
-        'Copy Join Info',
-      );
-      if (action) await this.copyJoinInfo();
+      void vscode.window
+        .showInformationMessage(`LanPair: hosting on ${this.joinAddress(info)} — PIN ${pin}`, 'Copy Join Info')
+        .then((action) => (action ? this.copyJoinInfo() : undefined));
       if (process.platform === 'win32') {
         void vscode.window.showInformationMessage(
           'LanPair: if Windows asks about the firewall, allow access on private networks so guests can connect. ' +
@@ -116,70 +161,31 @@ export class SessionManager implements vscode.Disposable {
     return info;
   }
 
-  async join(target?: { host: string; port: number; pin: string }): Promise<boolean> {
-    if (this.state.kind !== 'idle') {
-      void vscode.window.showWarningMessage('LanPair: a session is already running. Stop it first.');
-      return false;
-    }
-    const address = target ? { host: target.host, port: target.port } : await this.askAddress();
-    if (!address) return false;
-    const config = readConfig();
-    let pin = target?.pin;
-    for (;;) {
-      pin ??= await vscode.window.showInputBox({
-        title: 'LanPair: Join Session',
-        prompt: `PIN shown by the host (${address.host}:${address.port})`,
-        placeHolder: '6 digits',
-        ignoreFocusOut: true,
-        validateInput: (v) => (/^\d{6}$/.test(v.trim()) ? undefined : 'Enter the 6-digit PIN'),
-      });
-      if (!pin) return false;
-      try {
-        const client = await SessionClient.connect({
-          host: address.host,
-          port: address.port,
-          pin: pin.trim(),
-          name: config.displayName,
-          color: config.color,
-          log: (m) => this.log.appendLine(`[guest] ${m}`),
-        });
-        this.becomeGuest(client);
-        await this.context.globalState.update(LAST_ADDRESS_KEY, `${address.host}:${address.port}`);
-        return true;
-      } catch (err) {
-        if (err instanceof JoinError && err.code === 'pin' && !target) {
-          void vscode.window.showWarningMessage(`LanPair: wrong PIN (${err.attemptsLeft} attempts left).`);
-          pin = undefined;
-          continue;
-        }
-        void vscode.window.showErrorMessage(`LanPair: ${err instanceof Error ? err.message : String(err)}`);
-        return false;
-      }
-    }
-  }
-
-  /** Phase 2: open a host file by its workspace-relative path. */
-  async openRemoteFile(relPath?: string): Promise<vscode.TextEditor | undefined> {
-    const client = this.guestClient;
-    if (!client) {
-      void vscode.window.showWarningMessage('LanPair: join a session first.');
-      return undefined;
-    }
-    relPath ??= await vscode.window.showInputBox({
-      title: `LanPair: Open file from ${client.welcome.rootName}`,
-      prompt: 'Path relative to the shared folder',
-      placeHolder: 'src/index.ts',
-      ignoreFocusOut: true,
-    });
-    if (!relPath) return undefined;
-    const uri = remoteUri(client.welcome.sessionId, relPath.trim().replace(/\\/g, '/').replace(/^\/+/, ''));
-    try {
-      const document = await vscode.workspace.openTextDocument(uri);
-      return await vscode.window.showTextDocument(document, { preview: false });
-    } catch (err) {
-      void vscode.window.showErrorMessage(`LanPair: ${err instanceof Error ? err.message : String(err)}`);
-      return undefined;
-    }
+  /** Tells guests about files created, changed or deleted on the host (batched). */
+  private watchFolder(folder: vscode.WorkspaceFolder, index: WorkspaceIndex, server: SessionServer): vscode.Disposable {
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, '**/*'));
+    let batch = new Map<string, FsChange['type']>();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const add = (uri: vscode.Uri, type: FsChange['type']) => {
+      const rel = path.relative(folder.uri.fsPath, uri.fsPath);
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return;
+      const docId = normalizeDocPath(rel);
+      if (index.isExcluded(docId) || docId.split('/').some((_, i, a) => index.isExcluded(a.slice(0, i + 1).join('/'), true))) return;
+      batch.set(docId, type);
+      timer ??= setTimeout(() => {
+        timer = undefined;
+        const changes = [...batch].map(([p, t]) => ({ path: p, type: t }));
+        batch = new Map();
+        server.notifyAll({ event: 'fs', changes });
+      }, 150);
+    };
+    return vscode.Disposable.from(
+      watcher,
+      watcher.onDidCreate((u) => add(u, 'created')),
+      watcher.onDidChange((u) => add(u, 'changed')),
+      watcher.onDidDelete((u) => add(u, 'deleted')),
+      new vscode.Disposable(() => timer && clearTimeout(timer)),
+    );
   }
 
   async copyJoinInfo(): Promise<void> {
@@ -192,25 +198,248 @@ export class SessionManager implements vscode.Disposable {
     void vscode.window.showInformationMessage('LanPair: join info copied.');
   }
 
+  // Joining
+
+  /**
+   * Connects to a host. Unless `inPlace`, the host's folder is then opened as
+   * this window's workspace (or in a new window if this one has a folder);
+   * the extension reconnects there using the join info kept in SecretStorage.
+   */
+  async join(target?: JoinTarget, options: { inPlace?: boolean } = {}): Promise<boolean> {
+    if (this.state.kind !== 'idle') {
+      void vscode.window.showWarningMessage('LanPair: a session is already running. Stop it first.');
+      return false;
+    }
+    const address = target ? { host: target.host, port: target.port } : await this.askAddress();
+    if (!address) return false;
+    let pin = target?.pin;
+    for (;;) {
+      pin ??= await vscode.window.showInputBox({
+        title: 'LanPair: Join Session',
+        prompt: `PIN shown by the host (${address.host}:${address.port})`,
+        placeHolder: '6 digits',
+        ignoreFocusOut: true,
+        validateInput: (v) => (/^\d{6}$/.test(v.trim()) ? undefined : 'Enter the 6-digit PIN'),
+      });
+      if (!pin) return false;
+      const joinTarget = { ...address, pin: pin.trim() };
+      let client: SessionClient;
+      try {
+        client = await this.connect(joinTarget);
+      } catch (err) {
+        if (err instanceof JoinError && err.code === 'pin' && !target) {
+          void vscode.window.showWarningMessage(`LanPair: wrong PIN (${err.attemptsLeft} attempts left).`);
+          pin = undefined;
+          continue;
+        }
+        void vscode.window.showErrorMessage(`LanPair: ${message(err)}`);
+        return false;
+      }
+      await this.context.globalState.update(LAST_ADDRESS_KEY, `${address.host}:${address.port}`);
+      const sessionId = client.welcome.sessionId;
+      const folderUri = remoteUri(sessionId, '');
+      const alreadyOpen = vscode.workspace.workspaceFolders?.some(
+        (f) => f.uri.scheme === SCHEME && f.uri.authority === sessionId,
+      );
+      if (options.inPlace || alreadyOpen) {
+        this.becomeGuest(client);
+        return true;
+      }
+      await this.context.secrets.store(secretKey(sessionId), JSON.stringify(joinTarget));
+      client.dispose();
+      const hasFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 0 || !!vscode.workspace.workspaceFile;
+      await vscode.commands.executeCommand('vscode.openFolder', folderUri, { forceNewWindow: hasFolder });
+      return true;
+    }
+  }
+
+  /** On activation: reconnect if this window's workspace is a LanPair folder. */
+  resumeFromWorkspace(): Promise<void> {
+    const folder = vscode.workspace.workspaceFolders?.find((f) => f.uri.scheme === SCHEME);
+    if (!folder || this.state.kind !== 'idle') return Promise.resolve();
+    const sessionId = folder.uri.authority;
+    // Registered synchronously, so the workbench's first reads wait for us.
+    let settle!: (client: SessionClient | undefined) => void;
+    this.fs.setConnecting(sessionId, new Promise((r) => (settle = r)));
+    this.state = { kind: 'connecting' };
+    return this.resume(sessionId).then(settle, () => settle(undefined));
+  }
+
+  private async resume(sessionId: string): Promise<SessionClient | undefined> {
+    const stored = (await this.context.secrets.get(secretKey(sessionId))) ?? process.env.LANPAIR_TEST_JOIN;
+    if (!stored) {
+      this.state = { kind: 'idle' };
+      void vscode.window
+        .showErrorMessage('LanPair: this window shows a LanPair session but the join info is missing.', 'Join Session…', 'Close Folder')
+        .then((a) => this.onResumeFailed(a));
+      return undefined;
+    }
+    const target = JSON.parse(stored) as JoinTarget;
+    this.status.update({ kind: 'connecting', address: `${target.host}:${target.port}` });
+    let client: SessionClient;
+    try {
+      client = await this.connect(target);
+    } catch (err) {
+      this.state = { kind: 'idle' };
+      this.status.update({ kind: 'idle' });
+      void vscode.window
+        .showErrorMessage(`LanPair: could not reconnect: ${message(err)}`, 'Join Session…', 'Close Folder')
+        .then((a) => this.onResumeFailed(a));
+      return undefined;
+    }
+    this.state = { kind: 'idle' };
+    if (client.welcome.sessionId !== sessionId) {
+      // The host restarted its session: offer to open the new one.
+      await this.context.secrets.delete(secretKey(sessionId));
+      await this.context.secrets.store(secretKey(client.welcome.sessionId), stored);
+      client.dispose();
+      this.status.update({ kind: 'idle' });
+      void vscode.window
+        .showWarningMessage(`LanPair: ${client.welcome.hostName} started a new session.`, 'Open New Session')
+        .then((action) =>
+          action
+            ? vscode.commands.executeCommand('vscode.openFolder', remoteUri(client.welcome.sessionId, ''), { forceNewWindow: false })
+            : undefined,
+        );
+      return undefined;
+    }
+    this.becomeGuest(client);
+    return client;
+  }
+
+  private async onResumeFailed(action: string | undefined): Promise<void> {
+    if (action === 'Join Session…') await this.join();
+    if (action === 'Close Folder') await vscode.commands.executeCommand('workbench.action.closeFolder');
+  }
+
+  private connect(target: JoinTarget): Promise<SessionClient> {
+    const config = readConfig();
+    return SessionClient.connect({
+      host: target.host,
+      port: target.port,
+      pin: target.pin,
+      name: config.displayName,
+      color: safeColor(config.color),
+      log: (m) => this.log.appendLine(`[guest] ${m}`),
+    });
+  }
+
+  private becomeGuest(client: SessionClient): void {
+    const config = readConfig();
+    const cursors = new RemoteCursors(client.registry.awareness, this.fs, {
+      name: config.displayName,
+      color: safeColor(config.color),
+    });
+    const updateStatus = () =>
+      this.status.update({
+        kind: 'guest',
+        hostName: client.welcome.hostName,
+        rootName: client.welcome.rootName,
+        following: cursors.followed?.user.name,
+      });
+    const closed = client.onDidClose((reason) => {
+      if (this.state.kind === 'guest' && this.state.client === client) {
+        this.stop(reason);
+        void vscode.window.showWarningMessage(`LanPair: disconnected from host (${reason}).`);
+      }
+    });
+    this.state = {
+      kind: 'guest',
+      client,
+      cursors,
+      disposables: [
+        new vscode.Disposable(() => closed.dispose()),
+        this.fs.onDidChangeBindings(() => cursors.refresh()),
+        cursors.onDidChangeFollow(updateStatus),
+      ],
+    };
+    this.fs.setSession(client);
+    updateStatus();
+    this.log.appendLine(`[guest] joined ${client.welcome.hostName}'s "${client.welcome.rootName}"`);
+  }
+
+  // Shared commands
+
+  /** Opens a host file by path (also reachable through the Explorer). */
+  async openRemoteFile(relPath?: string): Promise<vscode.TextEditor | undefined> {
+    if (this.state.kind !== 'guest') {
+      void vscode.window.showWarningMessage('LanPair: join a session first.');
+      return undefined;
+    }
+    const client = this.state.client;
+    relPath ??= await vscode.window.showInputBox({
+      title: `LanPair: Open file from ${client.welcome.rootName}`,
+      prompt: 'Path relative to the shared folder',
+      placeHolder: 'src/index.ts',
+      ignoreFocusOut: true,
+    });
+    if (!relPath) return undefined;
+    const uri = remoteUri(client.welcome.sessionId, normalizeDocPath(relPath.trim()));
+    try {
+      const document = await vscode.workspace.openTextDocument(uri);
+      return await vscode.window.showTextDocument(document, { preview: false });
+    } catch (err) {
+      void vscode.window.showErrorMessage(`LanPair: ${message(err)}`);
+      return undefined;
+    }
+  }
+
+  async followParticipant(): Promise<void> {
+    const cursors = this.cursors;
+    if (!cursors) {
+      void vscode.window.showWarningMessage('LanPair: no session is running.');
+      return;
+    }
+    type Item = vscode.QuickPickItem & { clientId?: number };
+    const items: Item[] = cursors.participants().map((p) => ({
+      label: `$(person) ${p.user.name}`,
+      description: p.file ?? 'no file open',
+      clientId: p.clientId,
+    }));
+    if (cursors.followed) items.unshift({ label: '$(circle-slash) Stop Following' });
+    if (items.length === 0) {
+      void vscode.window.showInformationMessage('LanPair: nobody else is in the session yet.');
+      return;
+    }
+    const pick = await vscode.window.showQuickPick(items, { title: 'LanPair: Follow Participant' });
+    if (pick) cursors.follow(pick.clientId);
+  }
+
   async showMenu(): Promise<void> {
     type Item = vscode.QuickPickItem & { command: string };
+    const follow: Item = { label: '$(eye) Follow Participant…', command: 'lanpair.followParticipant' };
     const items: Item[] =
-      this.state.kind === 'idle'
+      this.state.kind === 'hosting'
         ? [
-            { label: '$(broadcast) Start Hosting', command: 'lanpair.startHosting' },
-            { label: '$(plug) Join Session…', command: 'lanpair.joinSession' },
+            { label: '$(copy) Copy Join Info', command: 'lanpair.copyJoinInfo', description: this.joinAddress(this.state.info) },
+            follow,
+            { label: '$(debug-stop) Stop Session', command: 'lanpair.stopSession' },
           ]
-        : this.state.kind === 'hosting'
+        : this.state.kind === 'guest'
           ? [
-              { label: '$(copy) Copy Join Info', command: 'lanpair.copyJoinInfo', description: this.joinAddress(this.state.info) },
-              { label: '$(debug-stop) Stop Session', command: 'lanpair.stopSession' },
-            ]
-          : [
+              follow,
               { label: '$(go-to-file) Open Remote File…', command: 'lanpair.openRemoteFile' },
               { label: '$(debug-disconnect) Leave Session', command: 'lanpair.stopSession' },
+            ]
+          : [
+              { label: '$(broadcast) Start Hosting', command: 'lanpair.startHosting' },
+              { label: '$(plug) Join Session…', command: 'lanpair.joinSession' },
             ];
     const pick = await vscode.window.showQuickPick(items, { title: 'LanPair' });
     if (pick) await vscode.commands.executeCommand(pick.command);
+  }
+
+  /** Stop Session command: also forgets the guest's join info and closes the LanPair folder. */
+  async leave(): Promise<void> {
+    const state = this.state;
+    this.stop();
+    if (state.kind === 'guest') {
+      const sessionId = state.client.welcome.sessionId;
+      await this.context.secrets.delete(secretKey(sessionId));
+      if (vscode.workspace.workspaceFolders?.some((f) => f.uri.scheme === SCHEME && f.uri.authority === sessionId)) {
+        await vscode.commands.executeCommand('workbench.action.closeFolder');
+      }
+    }
   }
 
   stop(reason?: string): void {
@@ -219,11 +448,13 @@ export class SessionManager implements vscode.Disposable {
     this.status.update({ kind: 'idle' });
     if (state.kind === 'hosting') {
       for (const d of state.disposables) d.dispose();
+      state.cursors.dispose();
       state.server.dispose();
       state.docs.dispose();
       this.log.appendLine('[host] session stopped');
     } else if (state.kind === 'guest') {
       for (const d of state.disposables) d.dispose();
+      state.cursors.dispose();
       this.fs.setSession(undefined);
       state.client.dispose();
       state.client.registry.dispose();
@@ -233,19 +464,6 @@ export class SessionManager implements vscode.Disposable {
 
   dispose(): void {
     this.stop();
-  }
-
-  private becomeGuest(client: SessionClient): void {
-    const closed = client.onDidClose((reason) => {
-      if (this.state.kind === 'guest' && this.state.client === client) {
-        this.stop(reason);
-        void vscode.window.showWarningMessage(`LanPair: disconnected from host (${reason}).`);
-      }
-    });
-    this.state = { kind: 'guest', client, disposables: [new vscode.Disposable(() => closed.dispose())] };
-    this.fs.setSession(client);
-    this.status.update({ kind: 'guest', hostName: client.welcome.hostName, rootName: client.welcome.rootName });
-    this.log.appendLine(`[guest] joined ${client.welcome.hostName}'s "${client.welcome.rootName}"`);
   }
 
   private async askAddress(): Promise<{ host: string; port: number } | undefined> {
