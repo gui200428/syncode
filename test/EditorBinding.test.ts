@@ -38,6 +38,33 @@ describe('EditorBinding', () => {
     expectConverged(host, guest);
   });
 
+  it('keeps a local keystroke identical to an in-flight remote one (not its echo)', async () => {
+    const { host, guest, link } = await createPair('ab', { manual: true });
+    guest.raw.userEdit([{ offset: 1, length: 0, text: 'x' }]);
+    link.deliver(host.ydoc);
+    await tick(); // host binding sends "insert x at 1" to its editor (held)
+    expect(host.raw.pendingApplies).toBe(1);
+    // The host user types the same character at the same place first: the text
+    // equals what the remote edit would produce, but it is a local edit.
+    host.raw.userEdit([{ offset: 1, length: 0, text: 'x' }]);
+    host.raw.userEdit([{ offset: 2, length: 0, text: 'y' }]);
+    await settle([host, guest], link);
+    expect(host.raw.rejected).toBe(1);
+    expect(host.text()).toBe('axxyb');
+    expectConverged(host, guest);
+  });
+
+  it('a coincident local deletion is merged with the remote one', async () => {
+    const { host, guest, link } = await createPair('abc', { manual: true });
+    guest.raw.userEdit([{ offset: 1, length: 1, text: '' }]);
+    link.deliver(host.ydoc);
+    await tick();
+    host.raw.userEdit([{ offset: 1, length: 1, text: '' }]);
+    await settle([host, guest], link);
+    expect(host.text()).toBe('ac');
+    expectConverged(host, guest);
+  });
+
   it('does not echo remote edits back into the Y.Text', async () => {
     const { host, guest, link } = await createPair('abc');
     const localTx: unknown[] = [];
@@ -156,10 +183,15 @@ describe('EditorBinding', () => {
     });
   });
 
-  it('converges under random concurrent editing (fuzz)', async () => {
+  it.each([
+    ['mixed text', undefined],
+    // Both sides typing the same few characters: a local keystroke often
+    // equals the remote edit in flight (it must not be taken for its echo).
+    ['coincident keystrokes', 'a '],
+  ])('converges under random concurrent editing (fuzz, %s)', async (_name, alphabet) => {
     let rejected = 0;
     for (let seed = 1; seed <= 40; seed++) {
-      const r = rng(seed);
+      const r = rng(seed, alphabet);
       const { host, guest, link } = await createPair('fn main() {\n  body\n}\n', {
         manual: true,
         hostEol: seed % 2 ? '\r\n' : '\n',

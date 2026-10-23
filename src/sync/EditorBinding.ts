@@ -14,7 +14,6 @@ import {
 } from './delta';
 import type { BindableDocument, Disposable } from './document';
 
-
 interface InFlight {
   /** Delta sent to the editor, in coordinates of the document at send time. */
   readonly delta: Delta;
@@ -24,6 +23,26 @@ interface InFlight {
   /** A local edit reached the document first, so this edit is going to be rejected. */
   superseded: boolean;
   resolved: boolean;
+  /**
+   * Set when the echo is seen before the edit resolves: the text the edit
+   * inserted, at current document offsets. If the edit then turns out to be
+   * rejected, that "echo" was a local edit identical to it (see onApplied).
+   */
+  inserted?: Array<{ offset: number; text: string }>;
+}
+
+/** Ranges a delta inserts, as offsets in the text after it. */
+function insertedRanges(delta: Delta): Array<{ offset: number; text: string }> {
+  const ranges: Array<{ offset: number; text: string }> = [];
+  let pos = 0;
+  for (const op of delta) {
+    if ('retain' in op) pos += op.retain;
+    else if ('insert' in op) {
+      ranges.push({ offset: pos, text: op.insert });
+      pos += op.insert.length;
+    }
+  }
+  return ranges;
 }
 
 export interface EditorBindingOptions {
@@ -142,9 +161,10 @@ export class EditorBinding implements Disposable {
     const f = this.inFlight;
     if (f && !f.echoSeen && !f.superseded) {
       if (this.document.getText() === f.expected) {
-        // Echo of our own applyEdit.
+        // Echo of our own applyEdit (or, rarely, the same edit typed locally).
         f.echoSeen = true;
         if (f.resolved) this.settle();
+        else f.inserted = insertedRanges(f.delta);
         return;
       }
       // The user edited before our edit was applied; it will be rejected.
@@ -153,6 +173,7 @@ export class EditorBinding implements Disposable {
     }
 
     const local = fromEdits(changes);
+    if (f?.inserted) for (const r of f.inserted) r.offset = transformIndex(local, r.offset);
     const toY = transform(this.pending, local, true);
     this.pending = transform(local, this.pending, false);
     if (isIdentity(toY)) return;
@@ -215,6 +236,11 @@ export class EditorBinding implements Disposable {
       this.settle();
       return;
     }
+    if (!ok && f.echoSeen) {
+      this.adoptCoincidentEdit(f);
+      this.settle();
+      return;
+    }
     if (!ok) {
       this.pending = compose(f.delta, this.pending);
       this.inFlight = undefined;
@@ -237,6 +263,27 @@ export class EditorBinding implements Disposable {
     this.inFlight = undefined;
     this.failures = 0;
     this.schedule();
+  }
+
+  /**
+   * Our edit was rejected although its "echo" was seen: the user made the very
+   * same change first (e.g. both typed a space at the same place), and we took
+   * it for the echo, so it never reached the Y.Text. Both happened, so keep
+   * both: a deletion of the same text counts once, inserted text twice. The
+   * user's copy is added to the Y.Text, and the remote copy is still owed to
+   * the editor.
+   */
+  private adoptCoincidentEdit(f: InFlight): void {
+    // While the echo was assumed, `pending` alone maps editor → Y.Text.
+    const targets = (f.inserted ?? [])
+      .map((r) => ({ y: transformIndex(this.pending, r.offset), text: r.text }))
+      .sort((a, b) => b.y - a.y);
+    if (targets.length === 0) return;
+    this.ytext.doc!.transact(() => {
+      for (const t of targets) this.ytext.insert(t.y, t.text);
+    }, this);
+    // Descending order keeps the lower indices valid.
+    for (const t of targets) this.pending = compose(this.pending, [{ retain: t.y }, { insert: t.text }]);
   }
 
   /** Last resort: trust the Y.Text and recompute the mapping from scratch. */
