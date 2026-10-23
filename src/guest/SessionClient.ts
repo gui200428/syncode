@@ -87,7 +87,16 @@ export class SessionClient implements Disposable {
         ws.terminate();
         reject(err);
       };
-      const timer = setTimeout(() => fail(new JoinError('timeout', `No answer from ${url}.`)), options.timeoutMs ?? 5000);
+      const timer = setTimeout(
+        () =>
+          fail(
+            new JoinError(
+              'timeout',
+              `No answer from ${url}. Check the address and that the host's firewall allows incoming TCP on port ${options.port} (ufw, firewalld or Windows Firewall).`,
+            ),
+          ),
+        options.timeoutMs ?? 5000,
+      );
       ws.once('open', () => {
         const hello: HelloPayload = {
           protocol: PROTOCOL_VERSION,

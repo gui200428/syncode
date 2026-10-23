@@ -1,4 +1,5 @@
 import { randomBytes, randomInt } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { lanAddresses, readConfig } from '../config';
@@ -47,6 +48,15 @@ export function parseAddress(input: string): { host: string; port: number } | un
   if (!m) return undefined;
   const port = Number(m[2]);
   return port > 0 && port < 65536 ? { host: m[1]!, port } : undefined;
+}
+
+/** ufw keeps its on/off switch in a world-readable file; no root needed. */
+function ufwEnabled(): boolean {
+  try {
+    return /^ENABLED=yes/m.test(readFileSync('/etc/ufw/ufw.conf', 'utf8'));
+  } catch {
+    return false;
+  }
 }
 
 function message(err: unknown): string {
@@ -156,9 +166,25 @@ export class SessionManager implements vscode.Disposable {
           'LanPair: if Windows asks about the firewall, allow access on private networks so guests can connect. ' +
             'Set "lanpair.port" to keep the same port (and firewall rule) across sessions.',
         );
+      } else if (process.platform === 'linux' && ufwEnabled()) {
+        void this.showUfwHint(info, config.port === 0);
       }
     }
     return info;
+  }
+
+  private async showUfwHint(info: HostingInfo, randomPort: boolean): Promise<void> {
+    const subnet = info.addresses[0] ? `${info.addresses[0].split('.').slice(0, 3).join('.')}.0/24` : 'any';
+    const command = `sudo ufw allow from ${subnet} to any port ${info.port} proto tcp comment LanPair`;
+    const action = await vscode.window.showWarningMessage(
+      `LanPair: the ufw firewall is enabled and blocks incoming connections by default, so guests may get "No answer". ` +
+        `Allow the port with: ${command}` +
+        (randomPort ? ' — set "lanpair.port" to a fixed port first so the rule keeps working.' : ''),
+      'Copy Command',
+      ...(randomPort ? ['Open Settings'] : []),
+    );
+    if (action === 'Copy Command') await vscode.env.clipboard.writeText(command);
+    if (action === 'Open Settings') await vscode.commands.executeCommand('workbench.action.openSettings', 'lanpair.port');
   }
 
   /** Tells guests about files created, changed or deleted on the host (batched). */
