@@ -1,10 +1,22 @@
 import * as os from 'node:os';
 import * as vscode from 'vscode';
 
-const PALETTE = ['#e06c75', '#61afef', '#98c379', '#c678dd', '#e5c07b', '#56b6c2', '#d19a66', '#ff79c6'];
+export const PALETTE: ReadonlyArray<{ name: string; color: string }> = [
+  { name: 'Red', color: '#e06c75' },
+  { name: 'Blue', color: '#61afef' },
+  { name: 'Green', color: '#98c379' },
+  { name: 'Purple', color: '#c678dd' },
+  { name: 'Yellow', color: '#e5c07b' },
+  { name: 'Cyan', color: '#56b6c2' },
+  { name: 'Orange', color: '#d19a66' },
+  { name: 'Pink', color: '#ff79c6' },
+];
 
 export interface LanPairConfig {
   displayName: string;
+  /** True when lanpair.color is set explicitly. */
+  colorConfigured: boolean;
+  nameLabels: 'always' | 'whileMoving' | 'never';
   color: string;
   port: number;
   exclude: string[];
@@ -22,7 +34,7 @@ function defaultName(): string {
 function colorFor(name: string): string {
   let h = 0;
   for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return PALETTE[h % PALETTE.length]!;
+  return PALETTE[h % PALETTE.length]!.color;
 }
 
 export function readConfig(): LanPairConfig {
@@ -31,6 +43,8 @@ export function readConfig(): LanPairConfig {
   return {
     displayName,
     color: c.get<string>('color')?.trim() || colorFor(displayName),
+    colorConfigured: !!c.get<string>('color')?.trim(),
+    nameLabels: c.get<LanPairConfig['nameLabels']>('nameLabels') ?? 'always',
     port: Math.max(0, Math.min(65535, c.get<number>('port') ?? 0)),
     exclude: c.get<string[]>('exclude') ?? [],
     maxFileBytes: Math.max(1, c.get<number>('maxFileSizeKB') ?? 2048) * 1024,
@@ -44,4 +58,35 @@ export function lanAddresses(): string[] {
     for (const a of list ?? []) if (a.family === 'IPv4' && !a.internal) result.push(a.address);
   }
   return result;
+}
+
+/**
+ * Asks for the name (prefilled) and, if never chosen, the color others will
+ * see. Saves both to the user settings. Returns undefined if cancelled.
+ */
+export async function askIdentity(options: { forceColor?: boolean } = {}): Promise<{ name: string; color: string } | undefined> {
+  const config = readConfig();
+  const name = await vscode.window.showInputBox({
+    title: 'LanPair: your name in the session',
+    prompt: 'Shown next to your cursor for the other participants',
+    value: config.displayName,
+    ignoreFocusOut: true,
+    validateInput: (v) => (v.trim().length === 0 ? 'Enter a name' : v.trim().length > 32 ? 'Use at most 32 characters' : undefined),
+  });
+  if (name === undefined) return undefined;
+  const settings = vscode.workspace.getConfiguration('lanpair');
+  if (name.trim() !== config.displayName) await settings.update('displayName', name.trim(), vscode.ConfigurationTarget.Global);
+
+  let color = config.colorConfigured ? config.color : colorFor(name.trim());
+  if (!config.colorConfigured || options.forceColor) {
+    const pick = await vscode.window.showQuickPick(
+      PALETTE.map((p) => ({ label: p.name, description: p.color, picked: p.color === color, color: p.color })),
+      { title: 'LanPair: your cursor color', placeHolder: `Current: ${color}`, ignoreFocusOut: true },
+    );
+    if (pick) {
+      color = pick.color;
+      await settings.update('color', color, vscode.ConfigurationTarget.Global);
+    }
+  }
+  return { name: name.trim(), color };
 }

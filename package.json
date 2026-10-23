@@ -49,6 +49,11 @@
         "category": "LanPair"
       },
       {
+        "command": "lanpair.setIdentity",
+        "title": "Set Name and Color",
+        "category": "LanPair"
+      },
+      {
         "command": "lanpair.openRemoteFile",
         "title": "Open Remote File…",
         "category": "LanPair"
@@ -105,6 +110,21 @@
           "default": 2048,
           "minimum": 1,
           "description": "Largest text file that is synced, in KB."
+        },
+        "lanpair.nameLabels": {
+          "type": "string",
+          "enum": [
+            "always",
+            "whileMoving",
+            "never"
+          ],
+          "enumDescriptions": [
+            "Always show the name above each remote cursor.",
+            "Show the name for a few seconds after the cursor moves.",
+            "Never show names (hover a cursor to see it)."
+          ],
+          "default": "always",
+          "description": "When to show participants' names above their cursors."
         }
       }
     }

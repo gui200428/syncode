@@ -2,7 +2,7 @@ import { randomBytes, randomInt } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { lanAddresses, readConfig } from '../config';
+import { askIdentity, lanAddresses, readConfig } from '../config';
 import { remoteUri, SCHEME, type LanPairFs } from '../guest/LanPairFs';
 import { JoinError, SessionClient } from '../guest/SessionClient';
 import { HostDocuments } from '../host/HostDocuments';
@@ -67,12 +67,26 @@ function message(err: unknown): string {
 export class SessionManager implements vscode.Disposable {
   private state: State = { kind: 'idle' };
 
+  private readonly configListener: vscode.Disposable;
+
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly fs: LanPairFs,
     private readonly status: StatusBar,
     private readonly log: Logger,
-  ) {}
+  ) {
+    this.configListener = vscode.workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration('lanpair')) return;
+      const config = readConfig();
+      this.cursors?.setUser({ name: config.displayName, color: safeColor(config.color) });
+      this.cursors?.setNameLabels(config.nameLabels);
+    });
+  }
+
+  /** Command: change the name/color shown to others (also during a session). */
+  async setIdentity(): Promise<void> {
+    await askIdentity({ forceColor: true });
+  }
 
   get kind(): State['kind'] {
     return this.state.kind;
@@ -98,6 +112,7 @@ export class SessionManager implements vscode.Disposable {
       void vscode.window.showErrorMessage('LanPair: open a local folder to share it.');
       return undefined;
     }
+    if (!options.pin && !(await askIdentity())) return undefined;
     const config = readConfig();
     const pin = options.pin ?? randomInt(0, 1_000_000).toString().padStart(6, '0');
     const sessionId = randomBytes(4).toString('hex');
@@ -133,10 +148,12 @@ export class SessionManager implements vscode.Disposable {
       bindingFor: (document) => docs.bindingFor(document)?.binding,
       uriFor: (docId) => vscode.Uri.joinPath(folder.uri, docId),
     };
-    const cursors = new RemoteCursors(docs.registry.awareness, locator, {
-      name: config.displayName,
-      color: safeColor(config.color),
-    });
+    const cursors = new RemoteCursors(
+      docs.registry.awareness,
+      locator,
+      { name: config.displayName, color: safeColor(config.color) },
+      config.nameLabels,
+    );
     const info: HostingInfo = { port: server.port, pin, addresses: lanAddresses(), sessionId };
     const updateStatus = () =>
       this.status.update({ kind: 'hosting', pin, guests: server.guests.length, following: cursors.followed?.user.name });
@@ -236,6 +253,7 @@ export class SessionManager implements vscode.Disposable {
       void vscode.window.showWarningMessage('LanPair: a session is already running. Stop it first.');
       return false;
     }
+    if (!target && !(await askIdentity())) return false;
     const address = target ? { host: target.host, port: target.port } : await this.askAddress();
     if (!address) return false;
     let pin = target?.pin;
@@ -352,10 +370,12 @@ export class SessionManager implements vscode.Disposable {
 
   private becomeGuest(client: SessionClient): void {
     const config = readConfig();
-    const cursors = new RemoteCursors(client.registry.awareness, this.fs, {
-      name: config.displayName,
-      color: safeColor(config.color),
-    });
+    const cursors = new RemoteCursors(
+      client.registry.awareness,
+      this.fs,
+      { name: config.displayName, color: safeColor(config.color) },
+      config.nameLabels,
+    );
     const updateStatus = () =>
       this.status.update({
         kind: 'guest',
@@ -434,22 +454,26 @@ export class SessionManager implements vscode.Disposable {
   async showMenu(): Promise<void> {
     type Item = vscode.QuickPickItem & { command: string };
     const follow: Item = { label: '$(eye) Follow Participant…', command: 'lanpair.followParticipant' };
+    const identity: Item = { label: '$(account) Set Name and Color…', command: 'lanpair.setIdentity', description: readConfig().displayName };
     const items: Item[] =
       this.state.kind === 'hosting'
         ? [
             { label: '$(copy) Copy Join Info', command: 'lanpair.copyJoinInfo', description: this.joinAddress(this.state.info) },
             follow,
+            identity,
             { label: '$(debug-stop) Stop Session', command: 'lanpair.stopSession' },
           ]
         : this.state.kind === 'guest'
           ? [
               follow,
               { label: '$(go-to-file) Open Remote File…', command: 'lanpair.openRemoteFile' },
+              identity,
               { label: '$(debug-disconnect) Leave Session', command: 'lanpair.stopSession' },
             ]
           : [
               { label: '$(broadcast) Start Hosting', command: 'lanpair.startHosting' },
               { label: '$(plug) Join Session…', command: 'lanpair.joinSession' },
+              identity,
             ];
     const pick = await vscode.window.showQuickPick(items, { title: 'LanPair' });
     if (pick) await vscode.commands.executeCommand(pick.command);
@@ -489,6 +513,7 @@ export class SessionManager implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.configListener.dispose();
     this.stop();
   }
 

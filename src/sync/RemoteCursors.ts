@@ -7,6 +7,11 @@ import type { EditorBinding } from './EditorBinding';
 const PUBLISH_THROTTLE_MS = 50;
 const RENDER_THROTTLE_MS = 50;
 const LABEL_VISIBLE_MS = 3000;
+const LABEL_CSS =
+  'position: absolute; z-index: 10; font-size: 0.75em; line-height: 1.3em; padding: 0 4px; ' +
+  'border-radius: 3px; white-space: nowrap; pointer-events: none;';
+
+export type NameLabels = 'always' | 'whileMoving' | 'never';
 
 /** Maps editor documents to shared docIds; implemented by the host and the guest side. */
 export interface DocLocator {
@@ -81,7 +86,8 @@ export class RemoteCursors implements vscode.Disposable {
   constructor(
     private readonly awareness: Awareness,
     private readonly locator: DocLocator,
-    private readonly user: UserInfo,
+    private user: UserInfo,
+    private nameLabels: NameLabels = 'always',
   ) {
     awareness.on('change', this.onAwarenessChange);
     this.subscriptions.push(
@@ -99,6 +105,17 @@ export class RemoteCursors implements vscode.Disposable {
       }),
     );
     this.publish();
+  }
+
+  /** Changes the name/color others see, during the session. */
+  setUser(user: UserInfo): void {
+    this.user = user;
+    this.publish();
+  }
+
+  setNameLabels(mode: NameLabels): void {
+    this.nameLabels = mode;
+    this.scheduleRender();
   }
 
   /** Call when a document became shared (or stopped being shared). */
@@ -234,11 +251,12 @@ export class RemoteCursors implements vscode.Disposable {
         }),
         label: vscode.window.createTextEditorDecorationType({
           rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed,
+          // Floats above the line (absolute), so it never pushes text aside.
           after: {
             backgroundColor: color,
             color: '#ffffff',
-            margin: '0 0 0 2px',
-            textDecoration: 'none; font-size: 0.85em; padding: 0 3px; border-radius: 2px;',
+            fontWeight: '600',
+            textDecoration: `none; ${LABEL_CSS} top: -1.25em;`,
           },
         }),
       };
@@ -283,11 +301,18 @@ export class RemoteCursors implements vscode.Disposable {
             const hover = new vscode.MarkdownString(`**${state.user.name}**`);
             bucket.cursor.push({ range: new vscode.Range(head, head), hoverMessage: hover });
             if (anchor && !anchor.isEqual(head)) bucket.selection.push(new vscode.Range(anchor, head));
-            if (i === 0 && labelUntil > now) {
-              nextLabelExpiry = Math.min(nextLabelExpiry, labelUntil);
+            const showLabel = this.nameLabels === 'always' || (this.nameLabels === 'whileMoving' && labelUntil > now);
+            if (i === 0 && showLabel) {
+              if (this.nameLabels === 'whileMoving') nextLabelExpiry = Math.min(nextLabelExpiry, labelUntil);
               bucket.label.push({
                 range: new vscode.Range(head, head),
-                renderOptions: { after: { contentText: state.user.name } },
+                renderOptions: {
+                  after: {
+                    contentText: state.user.name,
+                    // On the first line there is no room above: show it below.
+                    ...(head.line === 0 ? { textDecoration: `none; ${LABEL_CSS} top: 1.25em;` } : {}),
+                  },
+                },
               });
             }
           });

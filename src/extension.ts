@@ -37,6 +37,7 @@ export function activate(context: vscode.ExtensionContext): LanPairApi {
     command('lanpair.startHosting', () => sessions.startHosting()),
     command('lanpair.stopSession', () => sessions.leave()),
     command('lanpair.followParticipant', () => sessions.followParticipant()),
+    command('lanpair.setIdentity', () => sessions.setIdentity()),
     command('lanpair.joinSession', () => sessions.join()),
     command('lanpair.copyJoinInfo', () => sessions.copyJoinInfo()),
     command('lanpair.openRemoteFile', () => sessions.openRemoteFile()),
