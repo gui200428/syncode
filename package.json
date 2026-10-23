@@ -105,6 +105,11 @@
           ],
           "description": "Glob patterns of files that are not shared (in addition to .gitignore)."
         },
+        "lanpair.respectGitignore": {
+          "type": "boolean",
+          "default": true,
+          "description": "Hide files ignored by .gitignore from guests (as well as lanpair.exclude)."
+        },
         "lanpair.maxFileSizeKB": {
           "type": "integer",
           "default": 2048,

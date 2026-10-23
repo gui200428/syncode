@@ -20,6 +20,7 @@ export interface LanPairConfig {
   color: string;
   port: number;
   exclude: string[];
+  respectGitignore: boolean;
   maxFileBytes: number;
 }
 
@@ -47,6 +48,7 @@ export function readConfig(): LanPairConfig {
     nameLabels: c.get<LanPairConfig['nameLabels']>('nameLabels') ?? 'always',
     port: Math.max(0, Math.min(65535, c.get<number>('port') ?? 0)),
     exclude: c.get<string[]>('exclude') ?? [],
+    respectGitignore: c.get<boolean>('respectGitignore') ?? true,
     maxFileBytes: Math.max(1, c.get<number>('maxFileSizeKB') ?? 2048) * 1024,
   };
 }

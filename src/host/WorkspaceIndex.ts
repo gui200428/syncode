@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
+import { isIgnored, parseGitignore, type IgnoreRule } from '../gitignore';
 import { GlobSet } from '../glob';
 import { RemoteError, type FileStatResult, type FileKind } from '../protocol';
 import { normalizeDocPath } from '../sync/DocRegistry';
@@ -11,6 +12,8 @@ export const MAX_RAW_READ_BYTES = 16 * 1024 * 1024;
 export interface WorkspaceIndexOptions {
   maxFileBytes: number;
   exclude?: readonly string[];
+  /** Also hide what .gitignore files ignore (default true). */
+  respectGitignore?: boolean;
 }
 
 function isInside(root: string, candidate: string): boolean {
@@ -26,6 +29,8 @@ function isInside(root: string, candidate: string): boolean {
 export class WorkspaceIndex {
   private realRoot: Promise<string>;
   private readonly excluded: GlobSet;
+  /** Parsed .gitignore per folder ('' = root), loaded lazily. */
+  private readonly gitignores = new Map<string, Promise<IgnoreRule[]>>();
 
   constructor(
     readonly root: string,
@@ -35,8 +40,52 @@ export class WorkspaceIndex {
     this.excluded = new GlobSet(options.exclude ?? []);
   }
 
-  isExcluded(relPath: string, isDirectory = false): boolean {
-    return relPath !== '' && this.excluded.matches(normalizeDocPath(relPath), isDirectory);
+  /** Call when a .gitignore file was created, changed or deleted. */
+  invalidateGitignore(): void {
+    this.gitignores.clear();
+  }
+
+  /** True if this exact path is excluded (by lanpair.exclude or .gitignore); parents are not checked. */
+  async isExcluded(relPath: string, isDirectory = false): Promise<boolean> {
+    const rel = normalizeDocPath(relPath);
+    if (rel === '') return false;
+    if (this.excluded.matches(rel, isDirectory)) return true;
+    if (this.options.respectGitignore === false) return false;
+    const parent = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+    return isIgnored(await this.rulesFor(parent), rel, isDirectory);
+  }
+
+  /** True if the path or any of its parent folders is excluded. */
+  async isHidden(relPath: string): Promise<boolean> {
+    const segments = normalizeDocPath(relPath).split('/').filter(Boolean);
+    for (let i = 1; i <= segments.length; i++) {
+      const prefix = segments.slice(0, i).join('/');
+      const leaf = i === segments.length;
+      // The leaf may be a file or a folder; parents are folders.
+      if ((await this.isExcluded(prefix, true)) || (leaf && (await this.isExcluded(prefix, false)))) return true;
+    }
+    return false;
+  }
+
+  /** Rules of every .gitignore from the root down to `dir`, in order. */
+  private async rulesFor(dir: string): Promise<IgnoreRule[]> {
+    const dirs = [''];
+    const parts = dir ? dir.split('/') : [];
+    for (let i = 1; i <= parts.length; i++) dirs.push(parts.slice(0, i).join('/'));
+    const lists = await Promise.all(dirs.map((d) => this.gitignoreIn(d)));
+    return lists.flat();
+  }
+
+  private gitignoreIn(dir: string): Promise<IgnoreRule[]> {
+    let rules = this.gitignores.get(dir);
+    if (!rules) {
+      rules = fs.readFile(path.join(this.root, dir, '.gitignore'), 'utf8').then(
+        (content) => parseGitignore(content, dir),
+        () => [],
+      );
+      this.gitignores.set(dir, rules);
+    }
+    return rules;
   }
 
   /** Validates a guest-supplied relative path and returns its real absolute path. */
@@ -51,15 +100,8 @@ export class WorkspaceIndex {
     if (normalized.split('/').includes('..')) {
       throw new RemoteError('outside-root', 'path escapes the shared folder');
     }
-    // Excluded if the path itself or any parent folder matches lanpair.exclude.
-    const segments = normalized.split('/');
-    for (let i = 1; i <= segments.length; i++) {
-      const prefix = segments.slice(0, i).join('/');
-      const leaf = i === segments.length;
-      if (this.isExcluded(prefix, true) || (leaf && this.isExcluded(prefix, false))) {
-        throw new RemoteError('not-found', `not found: ${normalized}`);
-      }
-    }
+    // Excluded paths (lanpair.exclude, .gitignore) do not exist for guests.
+    if (await this.isHidden(normalized)) throw new RemoteError('not-found', `not found: ${normalized}`);
     const lexical = path.resolve(this.root, normalized);
     if (!isInside(path.resolve(this.root), lexical)) {
       throw new RemoteError('outside-root', 'path escapes the shared folder');
@@ -124,7 +166,7 @@ export class WorkspaceIndex {
       } else if (!e.isFile() && !isDir) {
         continue; // sockets, fifos...
       }
-      if (this.isExcluded(child, isDir)) continue;
+      if (await this.isExcluded(child, isDir)) continue;
       result.push([e.name, isDir ? 'directory' : 'file']);
     }
     return result;

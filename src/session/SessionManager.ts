@@ -116,7 +116,11 @@ export class SessionManager implements vscode.Disposable {
     const config = readConfig();
     const pin = options.pin ?? randomInt(0, 1_000_000).toString().padStart(6, '0');
     const sessionId = randomBytes(4).toString('hex');
-    const index = new WorkspaceIndex(folder.uri.fsPath, { maxFileBytes: config.maxFileBytes, exclude: config.exclude });
+    const index = new WorkspaceIndex(folder.uri.fsPath, {
+      maxFileBytes: config.maxFileBytes,
+      exclude: config.exclude,
+      respectGitignore: config.respectGitignore,
+    });
     const docs = new HostDocuments(index, (m) => this.log.appendLine(`[host] ${m}`));
     let server: SessionServer;
     try {
@@ -213,7 +217,12 @@ export class SessionManager implements vscode.Disposable {
       const rel = path.relative(folder.uri.fsPath, uri.fsPath);
       if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return;
       const docId = normalizeDocPath(rel);
-      if (index.isExcluded(docId) || docId.split('/').some((_, i, a) => index.isExcluded(a.slice(0, i + 1).join('/'), true))) return;
+      if (docId === '.gitignore' || docId.endsWith('/.gitignore')) index.invalidateGitignore();
+      void index.isHidden(docId).then((hidden) => {
+        if (!hidden) queue(docId, type);
+      });
+    };
+    const queue = (docId: string, type: FsChange['type']) => {
       batch.set(docId, type);
       timer ??= setTimeout(() => {
         timer = undefined;

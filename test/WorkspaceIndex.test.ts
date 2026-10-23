@@ -24,6 +24,28 @@ describe('WorkspaceIndex', () => {
     index = new WorkspaceIndex(root, { maxFileBytes: 1024 });
   });
 
+  it('hides files ignored by .gitignore files (root and nested) and lanpair.exclude', async () => {
+    const r = join(base, 'git');
+    mkdirSync(join(r, 'dist'), { recursive: true });
+    mkdirSync(join(r, 'pkg', 'gen'), { recursive: true });
+    writeFileSync(join(r, '.gitignore'), 'dist/\n*.log\n!keep.log\n');
+    writeFileSync(join(r, 'pkg', '.gitignore'), 'gen/\n');
+    for (const f of ['dist/out.js', 'a.log', 'keep.log', 'pkg/gen/x.ts', 'pkg/src.ts', 'notes.tmp']) writeFileSync(join(r, f), 'x');
+    const gi = new WorkspaceIndex(r, { maxFileBytes: 1024, exclude: ['*.tmp'] });
+    expect((await gi.list('')).map((e) => e[0]).sort()).toEqual(['.gitignore', 'keep.log', 'pkg']);
+    expect((await gi.list('pkg')).map((e) => e[0]).sort()).toEqual(['.gitignore', 'src.ts']);
+    for (const hidden of ['dist/out.js', 'a.log', 'pkg/gen/x.ts', 'notes.tmp']) {
+      await expect(gi.resolve(hidden)).rejects.toMatchObject({ code: 'not-found' });
+    }
+    // Disabled: only lanpair.exclude applies.
+    const plain = new WorkspaceIndex(r, { maxFileBytes: 1024, exclude: ['*.tmp'], respectGitignore: false });
+    expect((await plain.list('')).map((e) => e[0])).toContain('dist');
+    // Edits to .gitignore apply after invalidation.
+    writeFileSync(join(r, '.gitignore'), '*.log\n');
+    gi.invalidateGitignore();
+    expect((await gi.list('')).map((e) => e[0])).toContain('dist');
+  });
+
   it('resolves normal paths', async () => {
     expect(await index.resolve('src/a.ts')).toMatch(/src[\\/]a\.ts$/);
     expect(await index.resolve('./src//a.ts')).toMatch(/src[\\/]a\.ts$/);
