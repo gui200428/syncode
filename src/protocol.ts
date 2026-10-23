@@ -9,7 +9,7 @@
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** Max size of a single frame; files are limited to a few MB of text. */
 export const MAX_FRAME_BYTES = 32 * 1024 * 1024;
@@ -85,8 +85,25 @@ export interface RequestMap {
   stat: { params: { path: string }; result: FileStatResult };
   /** Directory entries as [name, kind]. */
   list: { params: { path: string }; result: { entries: Array<[string, FileKind]> } };
-  /** Raw content (base64) of a file that is not synced, for read-only display. */
+  /** Raw content (base64) of a file as saved on disk (any file up to 16 MB). */
   read: { params: { path: string }; result: { base64: string } };
+  /**
+   * Every shared file and folder below `path` ('' = root), for guests that
+   * mirror the folder to disk. Excluded paths are left out.
+   */
+  tree: { params: { path: string }; result: TreeResult };
+}
+
+export interface TreeFile {
+  path: string;
+  size: number;
+  mtime: number;
+}
+
+export interface TreeResult {
+  files: TreeFile[];
+  /** Folders, parents before children (empty ones included). */
+  dirs: string[];
 }
 
 export type RequestMethod = keyof RequestMap;

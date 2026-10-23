@@ -77,4 +77,14 @@ describe('WorkspaceIndex', () => {
     await expect(index.resolveTextFile('src')).rejects.toMatchObject({ code: 'not-a-file' });
     await expect(index.resolveTextFile('src/a.ts')).resolves.toBeTruthy();
   });
+
+  it('lists the whole tree without links that leave the root or duplicate folders', async () => {
+    const t = await index.tree('');
+    expect(t.files.map((f) => f.path).sort()).toEqual(['..config', 'big.txt', 'image.bin', 'link-in.ts', 'src/a.ts']);
+    expect(t.dirs).toEqual(['src']);
+    expect(t.files.find((f) => f.path === 'big.txt')).toMatchObject({ size: 2048 });
+    expect((await index.tree('src')).files.map((f) => f.path)).toEqual(['src/a.ts']);
+    expect(await index.tree('src/a.ts')).toMatchObject({ files: [{ path: 'src/a.ts' }], dirs: [] });
+    await expect(index.tree('../')).rejects.toMatchObject({ code: 'outside-root' });
+  });
 });

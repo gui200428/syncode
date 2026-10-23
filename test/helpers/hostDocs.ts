@@ -29,6 +29,7 @@ export function folderHostDocs(
     stat: (path) => index.stat(path),
     list: (path) => index.list(path),
     read: (path) => index.readRaw(path),
+    tree: (path) => index.tree(path),
   };
   return { docs, registry, index, saved };
 }

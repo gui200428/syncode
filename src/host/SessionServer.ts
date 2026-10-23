@@ -21,6 +21,7 @@ import {
   type RejectPayload,
   type RequestPayload,
   type ResponsePayload,
+  type TreeResult,
   type WelcomePayload,
 } from '../protocol';
 import type { Disposable } from '../sync/document';
@@ -40,8 +41,10 @@ export interface HostDocs {
   save(path: string): Promise<void>;
   stat(path: string): Promise<FileStatResult>;
   list(path: string): Promise<Array<[string, FileKind]>>;
-  /** Raw bytes of a file that is not synced (binary or too large). */
+  /** Raw bytes of a file as saved on disk. */
   read(path: string): Promise<Uint8Array>;
+  /** Files and folders below a folder, recursively. */
+  tree(path: string): Promise<TreeResult>;
 }
 
 export interface SessionServerOptions {
@@ -376,6 +379,9 @@ export class SessionServer implements Disposable {
           return;
         case 'read':
           respond({ result: { base64: Buffer.from(await this.options.docs.read(params.path)).toString('base64') } });
+          return;
+        case 'tree':
+          respond({ result: await this.options.docs.tree(params.path) });
           return;
         default:
           throw new RemoteError('unknown-method', `unknown method ${String(req.method)}`);

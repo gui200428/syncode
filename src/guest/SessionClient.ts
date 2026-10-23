@@ -22,6 +22,7 @@ import {
   type RequestMap,
   type RequestMethod,
   type ResponsePayload,
+  type TreeResult,
   type WelcomePayload,
 } from '../protocol';
 import type { Disposable } from '../sync/document';
@@ -260,6 +261,10 @@ export class SessionClient implements Disposable {
 
   async read(path: string): Promise<Uint8Array> {
     return Buffer.from((await this.request('read', { path: normalizeDocPath(path) })).base64, 'base64');
+  }
+
+  tree(path = ''): Promise<TreeResult> {
+    return this.request('tree', { path: normalizeDocPath(path) });
   }
 
   async save(path: string): Promise<void> {

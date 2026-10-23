@@ -2,10 +2,12 @@ import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { isIgnored, parseGitignore, type IgnoreRule } from '../gitignore';
 import { GlobSet } from '../glob';
-import { RemoteError, type FileStatResult, type FileKind } from '../protocol';
+import { RemoteError, type FileStatResult, type FileKind, type TreeResult } from '../protocol';
 import { normalizeDocPath } from '../sync/DocRegistry';
 
 const BINARY_SNIFF_BYTES = 8000;
+/** Upper bound for tree(); a mirror of more files than this is not useful over a LAN session. */
+export const MAX_TREE_FILES = 50_000;
 /** Largest file a guest can read raw (binary or oversized files, read-only). */
 export const MAX_RAW_READ_BYTES = 16 * 1024 * 1024;
 
@@ -172,7 +174,40 @@ export class WorkspaceIndex {
     return result;
   }
 
-  /** Raw bytes for read-only display of files that are not synced as text. */
+  /** Every visible file and folder below `relPath`, depth first (or just the file, for a file path). */
+  async tree(relPath: string): Promise<TreeResult> {
+    const result: TreeResult = { files: [], dirs: [] };
+    const realRoot = await this.realRoot;
+    const visit = async (dir: string): Promise<void> => {
+      for (const [name, kind] of await this.list(dir)) {
+        const child = dir ? `${dir}/${name}` : name;
+        if (kind === 'directory') {
+          // Links to folders inside the root would list the same files twice.
+          const real = await fs.realpath(path.join(this.root, child)).catch(() => undefined);
+          if (!real || normalizeDocPath(path.relative(realRoot, real)) !== child) continue;
+          result.dirs.push(child);
+          await visit(child);
+        } else {
+          const st = await fs.stat(path.join(this.root, child)).catch(() => undefined);
+          if (!st?.isFile()) continue;
+          if (result.files.length >= MAX_TREE_FILES) {
+            throw new RemoteError('too-many-files', `more than ${MAX_TREE_FILES} shared files`);
+          }
+          result.files.push({ path: child, size: st.size, mtime: Math.round(st.mtimeMs) });
+        }
+      }
+    };
+    const base = normalizeDocPath(relPath);
+    const st = await fs.stat(await this.resolve(base));
+    if (st.isFile()) {
+      result.files.push({ path: base, size: st.size, mtime: Math.round(st.mtimeMs) });
+      return result;
+    }
+    await visit(base);
+    return result;
+  }
+
+  /** Raw bytes of a file as saved on disk (read-only display, mirrors). */
   async readRaw(relPath: string): Promise<Uint8Array> {
     const real = await this.resolve(relPath);
     const st = await fs.stat(real);

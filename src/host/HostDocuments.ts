@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { RemoteError, type FileKind, type FileStatResult } from '../protocol';
+import { RemoteError, type FileKind, type FileStatResult, type TreeResult } from '../protocol';
 import { DocRegistry, type DocEntry } from '../sync/DocRegistry';
 import { EditorBinding } from '../sync/EditorBinding';
 import { bindableDocument } from '../sync/VscodeDocument';
@@ -72,6 +72,10 @@ export class HostDocuments implements HostDocs, vscode.Disposable {
 
   read(path: string): Promise<Uint8Array> {
     return this.index.readRaw(path);
+  }
+
+  tree(path: string): Promise<TreeResult> {
+    return this.index.tree(path);
   }
 
   /** The TextDocument bound to a shared doc, if any. */
