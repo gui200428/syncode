@@ -4,7 +4,7 @@ Real-time pair editing for Antigravity / Code OSS over the local network.
 Two people on the same LAN edit the same files simultaneously and see each
 other's cursors. Built on Yjs (CRDT); no cloud server, no accounts, no internet.
 
-Status: Phase 4 (discovery, reconnection, .gitignore, disk changes, local undo). Phase 5 (mirror mode) is optional. See `PROMPT-claude-code-lanpair.md` for the roadmap.
+Status: Phase 5 (mirror mode: the guest can work on a local copy so its language servers work). See `PROMPT-claude-code-lanpair.md` for the roadmap.
 
 ## Development
 
@@ -14,6 +14,7 @@ npm run build     # bundle to dist/extension.js
 npm test          # vitest (pure logic)
 npm run test:integration  # runs inside the installed Antigravity (opens windows briefly)
 npm run test:pair         # host + guest Antigravity instances typing together (LANPAIR_PAIR_SECONDS, default 120)
+npm run test:mirror       # the same with the guest in mirror mode
 npm run package   # produce lanpair.vsix
 ```
 
@@ -53,6 +54,39 @@ are edited live; binary or oversized files open read-only. Ctrl+S on the guest
 saves the file on the host (the host's save participants, such as format on
 save, run there too).
 
+### Mirror mode (guest)
+
+After the PIN, Join asks how to open the shared folder:
+
+- **Open the shared folder**: the `lanpair://` folder above. Nothing is written
+  to the guest's disk, but language servers (IntelliSense, go to definition,
+  diagnostics), terminals and tools do not work on it.
+- **Mirror into a local folder**: pick a folder (empty, or a clone of the same
+  project). The host's files are copied into it and it opens as a normal local
+  folder, so everything that needs files on disk works: the guest can run
+  `npm install` there (excluded folders such as `node_modules` are not copied,
+  and files created on the guest stay on the guest).
+
+How the mirror stays in sync:
+
+- Files that are not open are copies of the host's **saved** files, updated
+  when they change on the host (saves, git checkout, new or deleted files).
+- A file opened in an editor is edited live, like in the other mode. It shows
+  the host's unsaved changes too, so it is marked dirty while the shared text
+  has unsaved changes.
+- Saving is shared: Ctrl+S on the guest saves on both machines, and a save on
+  the host saves the guest's copy (save participants such as format on save
+  run on the side that saves).
+- If files in the folder differ from the host's and were not written by
+  LanPair (first mirror into a clone, or local changes), you are asked whether
+  to replace them or keep yours. Files changed on the guest are never deleted.
+  LanPair remembers what it wrote in its own storage, not in the folder.
+- The window reconnects when the folder is opened again (join info is kept in
+  the editor's secret storage). If the host started a new session, enter the
+  new PIN. **Leave Session** stops mirroring; the files stay as a local copy.
+- Paths from the host are validated before anything is written: no `..`, no
+  absolute paths, no symbolic links leaving the folder, never inside `.git`.
+
 Both sides see each other's cursors and selections, with the name floating
 above the cursor (`lanpair.nameLabels`: always / whileMoving / never).
 In shared files Ctrl+Z / Ctrl+Shift+Z undo and redo only your own edits
@@ -80,9 +114,16 @@ symbolic links leaving the shared folder (`src/host/WorkspaceIndex.ts`).
   `ufw allow` command. Fix `lanpair.port` so the rule keeps working.
 - If the host's file changes on disk while the host has unsaved session edits,
   the editor keeps the session text (like VS Code does for any dirty file).
-- The guest cannot create, rename or delete files.
+- The guest cannot create, rename or delete shared files. In mirror mode, files
+  created on the guest stay local, and only edits made in an editor are
+  shared (a guest-side formatter CLI or `git checkout` is not sent to the host;
+  the host's next change to such a file replaces it).
+- In mirror mode, the guest's language server sees the host's unsaved changes
+  only in files open on the guest; other files are the saved versions.
+- Mirror mode copies at most 50,000 files (16 MB each).
 - The guest window applies the host's `.vscode/settings.json` like any workspace
-  folder; only join sessions of people you trust.
+  folder (in mirror mode it is also on disk, together with tasks and other
+  workspace files); only join sessions of people you trust.
 - On the guest, remote edits mark the editor as dirty; saving (Ctrl+S) is
   how it becomes clean again.
 - Only Y.Text content is synced; embeds/attributes are not supported (not needed for code).

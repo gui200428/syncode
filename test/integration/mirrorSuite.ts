@@ -38,7 +38,7 @@ let logOf: LanPairApi | undefined;
 
 function step(name: string): void {
   // The log line count shows which step a logged problem belongs to.
-  console.log(`[${role}] ${name}${logOf ? ` (log line ${logOf.recentLogLines().length})` : ''}`);
+  console.log(`[${role}] ${new Date().toISOString().slice(11, 23)} ${name}${logOf ? ` (log line ${logOf.recentLogLines().length})` : ''}`);
 }
 
 async function api(): Promise<LanPairApi> {
