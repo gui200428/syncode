@@ -17,9 +17,41 @@
     "Other"
   ],
   "main": "./dist/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onFileSystem:lanpair"
+  ],
   "contributes": {
     "commands": [
+      {
+        "command": "lanpair.startHosting",
+        "title": "Start Hosting",
+        "category": "LanPair"
+      },
+      {
+        "command": "lanpair.stopSession",
+        "title": "Stop Session",
+        "category": "LanPair"
+      },
+      {
+        "command": "lanpair.joinSession",
+        "title": "Join Session…",
+        "category": "LanPair"
+      },
+      {
+        "command": "lanpair.copyJoinInfo",
+        "title": "Copy Join Info",
+        "category": "LanPair"
+      },
+      {
+        "command": "lanpair.openRemoteFile",
+        "title": "Open Remote File…",
+        "category": "LanPair"
+      },
+      {
+        "command": "lanpair.showMenu",
+        "title": "Show Menu",
+        "category": "LanPair"
+      },
       {
         "command": "lanpair.hello",
         "title": "Hello",
@@ -30,7 +62,46 @@
         "title": "Debug: Mirror Active Editor (toggle)",
         "category": "LanPair"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "LanPair",
+      "properties": {
+        "lanpair.displayName": {
+          "type": "string",
+          "default": "",
+          "description": "Name shown to other participants. Defaults to your user name."
+        },
+        "lanpair.color": {
+          "type": "string",
+          "default": "",
+          "description": "Cursor color shown to others (CSS color). Defaults to a color derived from your name."
+        },
+        "lanpair.port": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Port the host listens on. 0 picks a free port each time; fix it to keep one firewall rule."
+        },
+        "lanpair.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/node_modules/**",
+            "**/.git/**"
+          ],
+          "description": "Glob patterns of files that are not shared (in addition to .gitignore)."
+        },
+        "lanpair.maxFileSizeKB": {
+          "type": "integer",
+          "default": 2048,
+          "minimum": 1,
+          "description": "Largest text file that is synced, in KB."
+        }
+      }
+    }
   },
   "scripts": {
     "build": "node esbuild.mjs",
@@ -38,7 +109,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "package": "npm run typecheck && node esbuild.mjs --production && vsce package --no-dependencies --out lanpair.vsix",
-    "test:integration": "npm run build && node test/integration/runTest.mjs"
+    "test:integration": "npm run build && node test/integration/runTest.mjs",
+    "test:pair": "npm run build && node test/integration/runPair.mjs"
   },
   "dependencies": {
     "bonjour-service": "1.4.4",
