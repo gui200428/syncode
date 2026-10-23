@@ -72,6 +72,16 @@
         "command": "lanpair.debugMirror",
         "title": "Debug: Mirror Active Editor (toggle)",
         "category": "LanPair"
+      },
+      {
+        "command": "lanpair.undo",
+        "title": "Undo My Last Edit",
+        "category": "LanPair"
+      },
+      {
+        "command": "lanpair.redo",
+        "title": "Redo My Last Edit",
+        "category": "LanPair"
       }
     ],
     "configuration": {
@@ -135,9 +145,33 @@
           "type": "boolean",
           "default": true,
           "description": "Announce hosted sessions on the local network (mDNS) so guests can pick them in Join Session."
+        },
+        "lanpair.localUndo": {
+          "type": "boolean",
+          "default": true,
+          "description": "In shared files, Ctrl+Z / Ctrl+Shift+Z undo and redo only your own edits (the editor's native undo would also revert other participants' edits)."
         }
       }
-    }
+    },
+    "keybindings": [
+      {
+        "command": "lanpair.undo",
+        "key": "ctrl+z",
+        "mac": "cmd+z",
+        "when": "editorTextFocus && lanpair.sharedEditor && !editorReadonly"
+      },
+      {
+        "command": "lanpair.redo",
+        "key": "ctrl+shift+z",
+        "mac": "cmd+shift+z",
+        "when": "editorTextFocus && lanpair.sharedEditor && !editorReadonly"
+      },
+      {
+        "command": "lanpair.redo",
+        "key": "ctrl+y",
+        "when": "editorTextFocus && lanpair.sharedEditor && !editorReadonly"
+      }
+    ]
   },
   "scripts": {
     "build": "node esbuild.mjs",

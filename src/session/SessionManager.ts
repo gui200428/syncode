@@ -12,6 +12,7 @@ import { WorkspaceIndex } from '../host/WorkspaceIndex';
 import type { Logger } from '../log';
 import { PROTOCOL_VERSION, type FsChange } from '../protocol';
 import { normalizeDocPath } from '../sync/DocRegistry';
+import { LocalUndo } from '../sync/LocalUndo';
 import { RemoteCursors, safeColor, type DocLocator } from '../sync/RemoteCursors';
 import type { StatusBar } from '../ui/StatusBar';
 
@@ -37,9 +38,10 @@ type State =
       docs: HostDocuments;
       info: HostingInfo;
       cursors: RemoteCursors;
+      undo: LocalUndo;
       disposables: vscode.Disposable[];
     }
-  | { kind: 'guest'; client: SessionClient; cursors: RemoteCursors; disposables: vscode.Disposable[] };
+  | { kind: 'guest'; client: SessionClient; cursors: RemoteCursors; undo: LocalUndo; disposables: vscode.Disposable[] };
 
 const LAST_ADDRESS_KEY = 'lanpair.lastAddress';
 const secretKey = (sessionId: string) => `lanpair.join.${sessionId}`;
@@ -81,6 +83,7 @@ export class SessionManager implements vscode.Disposable {
       const config = readConfig();
       this.cursors?.setUser({ name: config.displayName, color: safeColor(config.color) });
       this.cursors?.setNameLabels(config.nameLabels);
+      if (this.state.kind === 'hosting' || this.state.kind === 'guest') this.state.undo.setEnabled(config.localUndo);
     });
   }
 
@@ -99,6 +102,15 @@ export class SessionManager implements vscode.Disposable {
 
   get cursors(): RemoteCursors | undefined {
     return this.state.kind === 'hosting' || this.state.kind === 'guest' ? this.state.cursors : undefined;
+  }
+
+  /** Undo/redo own edits in shared editors; native undo elsewhere. */
+  async undo(kind: 'undo' | 'redo'): Promise<void> {
+    if (this.state.kind === 'hosting' || this.state.kind === 'guest') {
+      await (kind === 'undo' ? this.state.undo.undo() : this.state.undo.redo());
+    } else {
+      await vscode.commands.executeCommand(kind);
+    }
   }
 
   // Hosting
@@ -159,6 +171,7 @@ export class SessionManager implements vscode.Disposable {
       { name: config.displayName, color: safeColor(config.color) },
       config.nameLabels,
     );
+    const undo = new LocalUndo(locator, config.localUndo);
     const info: HostingInfo = { port: server.port, pin, addresses: lanAddresses(), sessionId };
     const updateStatus = () =>
       this.status.update({ kind: 'hosting', pin, guests: server.guests.length, following: cursors.followed?.user.name });
@@ -169,9 +182,13 @@ export class SessionManager implements vscode.Disposable {
       docs,
       info,
       cursors,
+      undo,
       disposables: [
         new vscode.Disposable(() => guestsChanged.dispose()),
-        docs.onDidChangeBindings(() => cursors.refresh()),
+        docs.onDidChangeBindings(() => {
+          cursors.refresh();
+          undo.refresh();
+        }),
         cursors.onDidChangeFollow(updateStatus),
         this.watchFolder(folder, index, server),
       ],
@@ -411,14 +428,19 @@ export class SessionManager implements vscode.Disposable {
         void vscode.window.showWarningMessage(`LanPair: session ended (${reason}).`);
       }
     });
+    const undo = new LocalUndo(this.fs, config.localUndo);
     this.state = {
       kind: 'guest',
       client,
       cursors,
+      undo,
       disposables: [
         new vscode.Disposable(() => closed.dispose()),
         new vscode.Disposable(() => stateChanged.dispose()),
-        this.fs.onDidChangeBindings(() => cursors.refresh()),
+        this.fs.onDidChangeBindings(() => {
+          cursors.refresh();
+          undo.refresh();
+        }),
         cursors.onDidChangeFollow(updateStatus),
       ],
     };
@@ -522,12 +544,14 @@ export class SessionManager implements vscode.Disposable {
     if (state.kind === 'hosting') {
       for (const d of state.disposables) d.dispose();
       state.cursors.dispose();
+      state.undo.dispose();
       state.server.dispose();
       state.docs.dispose();
       this.log.appendLine('[host] session stopped');
     } else if (state.kind === 'guest') {
       for (const d of state.disposables) d.dispose();
       state.cursors.dispose();
+      state.undo.dispose();
       this.fs.setSession(undefined);
       state.client.dispose();
       state.client.registry.dispose();

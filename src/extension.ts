@@ -38,6 +38,8 @@ export function activate(context: vscode.ExtensionContext): LanPairApi {
     command('lanpair.stopSession', () => sessions.leave()),
     command('lanpair.followParticipant', () => sessions.followParticipant()),
     command('lanpair.setIdentity', () => sessions.setIdentity()),
+    command('lanpair.undo', () => sessions.undo('undo')),
+    command('lanpair.redo', () => sessions.undo('redo')),
     command('lanpair.joinSession', () => sessions.join()),
     command('lanpair.copyJoinInfo', () => sessions.copyJoinInfo()),
     command('lanpair.openRemoteFile', () => sessions.openRemoteFile()),

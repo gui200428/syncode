@@ -85,6 +85,10 @@ export class EditorBinding implements Disposable {
     this.schedule();
   }
 
+  get isDisposed(): boolean {
+    return this.disposed;
+  }
+
   /** True when the editor and the Y.Text are known to hold the same text. */
   get isIdle(): boolean {
     return !this.inFlight && !this.scheduled && isIdentity(this.pending);

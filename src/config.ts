@@ -22,6 +22,7 @@ export interface LanPairConfig {
   exclude: string[];
   respectGitignore: boolean;
   advertise: boolean;
+  localUndo: boolean;
   maxFileBytes: number;
 }
 
@@ -51,6 +52,7 @@ export function readConfig(): LanPairConfig {
     exclude: c.get<string[]>('exclude') ?? [],
     respectGitignore: c.get<boolean>('respectGitignore') ?? true,
     advertise: c.get<boolean>('advertise') ?? true,
+    localUndo: c.get<boolean>('localUndo') ?? true,
     maxFileBytes: Math.max(1, c.get<number>('maxFileSizeKB') ?? 2048) * 1024,
   };
 }
