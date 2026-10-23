@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { LOCAL_ORIGIN } from '../src/sync/EditorBinding';
 import { createPair, createPeer, Link, settle, tick, type Peer } from './helpers/peers';
 import { rng } from './helpers/random';
 
@@ -43,7 +42,7 @@ describe('EditorBinding', () => {
     const { host, guest, link } = await createPair('abc');
     const localTx: unknown[] = [];
     guest.ydoc.on('afterTransaction', (tr: Y.Transaction) => {
-      if (tr.origin === LOCAL_ORIGIN) localTx.push(tr);
+      if (tr.origin === guest.binding) localTx.push(tr);
     });
     const versionBefore = guest.raw.version;
     host.raw.userEdit([{ offset: 1, length: 1, text: 'XYZ' }]);
@@ -195,6 +194,20 @@ describe('EditorBinding', () => {
     }
     // The run must actually exercise the applyEdit/typing race.
     expect(rejected).toBeGreaterThan(20);
+  });
+
+  it('keeps two editors bound to the same Y.Text in sync', async () => {
+    const ydoc = new Y.Doc();
+    ydoc.getText('content').insert(0, 'shared');
+    const a = createPeer('shared', { ydoc });
+    const b = createPeer('', { ydoc });
+    await settle([a, b]);
+    a.raw.userEdit([{ offset: 6, length: 0, text: '!' }]);
+    await settle([a, b]);
+    expect(b.text()).toBe('shared!');
+    b.raw.userEdit([{ offset: 0, length: 0, text: '>' }]);
+    await settle([a, b]);
+    expect(a.text()).toBe('>shared!');
   });
 
   it('stops syncing after dispose', async () => {

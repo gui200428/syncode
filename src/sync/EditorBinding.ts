@@ -12,8 +12,6 @@ import {
 } from './delta';
 import type { BindableDocument, Disposable } from './document';
 
-/** Transaction origin for edits made in this editor. Remote/disk edits use other origins. */
-export const LOCAL_ORIGIN = Symbol('lanpair-local');
 
 interface InFlight {
   /** Delta sent to the editor, in coordinates of the document at send time. */
@@ -32,6 +30,10 @@ export interface EditorBindingOptions {
 
 /**
  * Two-way binding between an editor document and a Y.Text.
+ *
+ * Local edits are written to the Y.Text with the binding itself as the
+ * transaction origin, so several editors bound to one Y.Text still see each
+ * other's changes (and a Y.UndoManager can track exactly this editor).
  *
  * Invariant: `ytext === applyDelta(document.getText(), pending)` (with any
  * in-flight edit composed in front of `pending` until its echo is seen).
@@ -86,6 +88,16 @@ export class EditorBinding implements Disposable {
     return !this.inFlight && !this.scheduled && isIdentity(this.pending);
   }
 
+  /** Resolves true once idle (e.g. before saving), false after `timeoutMs`. */
+  async whenIdle(timeoutMs = 2000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (!this.isIdle) {
+      if (this.disposed || Date.now() > deadline) return false;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    return true;
+  }
+
   /** Verifies the invariant; used by tests and as a safety net. */
   isConsistent(): boolean {
     const f = this.inFlight;
@@ -99,7 +111,7 @@ export class EditorBinding implements Disposable {
   }
 
   private onRemote(event: Y.YTextEvent, tr: Y.Transaction): void {
-    if (tr.origin === LOCAL_ORIGIN || this.disposed) return;
+    if (tr.origin === this || this.disposed) return;
     this.pending = compose(this.pending, fromYDelta(event.delta));
     this.schedule();
   }
@@ -131,7 +143,7 @@ export class EditorBinding implements Disposable {
         if (e.length > 0) this.ytext.delete(e.offset, e.length);
         if (e.text.length > 0) this.ytext.insert(e.offset, e.text);
       }
-    }, LOCAL_ORIGIN);
+    }, this);
   }
 
   private schedule(): void {
