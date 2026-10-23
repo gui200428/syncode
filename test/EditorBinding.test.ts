@@ -10,7 +10,7 @@ function expectConverged(...peers: Peer[]): void {
     expect(p.ytext()).toBe(expected);
     expect(p.text()).toBe(expected);
     expect(p.binding.isConsistent()).toBe(true);
-    expect(p.logs).toEqual([]);
+    expect(p.logs.filter((l) => /out of sync|threw|resolved before/.test(l))).toEqual([]);
   }
 }
 

@@ -11,7 +11,8 @@ Status: Phase 1 (CRDT core, no networking yet). See `PROMPT-claude-code-lanpair.
 ```sh
 npm install
 npm run build     # bundle to dist/extension.js
-npm test          # vitest
+npm test          # vitest (pure logic)
+npm run test:integration  # runs inside the installed Antigravity (opens windows briefly)
 npm run package   # produce lanpair.vsix
 ```
 

@@ -1,10 +1,16 @@
 import * as vscode from 'vscode';
+import { Logger } from './log';
 import { startDebugMirror } from './sync/debugMirror';
 
 let mirror: vscode.Disposable | undefined;
 
-export function activate(context: vscode.ExtensionContext): void {
-  const output = vscode.window.createOutputChannel('LanPair');
+/** Returned from activate(); used by the integration tests. */
+export interface LanPairApi {
+  recentLogLines(): readonly string[];
+}
+
+export function activate(context: vscode.ExtensionContext): LanPairApi {
+  const output = new Logger();
   context.subscriptions.push(
     output,
     vscode.commands.registerCommand('lanpair.hello', () => {
@@ -21,6 +27,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     new vscode.Disposable(() => mirror?.dispose()),
   );
+  return { recentLogLines: () => output.recentLines() };
 }
 
 export function deactivate(): void {}

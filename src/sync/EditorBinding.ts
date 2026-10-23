@@ -67,7 +67,17 @@ export class EditorBinding implements Disposable {
     const observer = (event: Y.YTextEvent, tr: Y.Transaction) => this.onRemote(event, tr);
     ytext.observe(observer);
     this.subscriptions.push({ dispose: () => ytext.unobserve(observer) });
-    this.subscriptions.push(document.onDidChange((changes) => this.onLocal(changes)));
+    this.subscriptions.push(
+      document.onDidChange((changes) => {
+        try {
+          this.onLocal(changes);
+        } catch (err) {
+          this.log(`local change handler threw: ${err instanceof Error ? err.stack : String(err)} changes=${JSON.stringify(changes)}`);
+          this.recover('local change could not be processed');
+          this.schedule();
+        }
+      }),
+    );
     this.schedule();
   }
 
@@ -134,7 +144,15 @@ export class EditorBinding implements Disposable {
   }
 
   private flush(): void {
-    if (this.inFlight || this.disposed || isIdentity(this.pending)) return;
+    if (this.inFlight || this.disposed) return;
+    if (isIdentity(this.pending)) {
+      // Idle: cheap safety net against any unforeseen editor behavior.
+      if (this.document.getText() !== this.ytext.toString()) {
+        this.recover('editor text differs from Y.Text while idle');
+        this.schedule();
+      }
+      return;
+    }
     const delta = this.pending;
     const text = this.document.getText();
     const f: InFlight = {
@@ -161,6 +179,7 @@ export class EditorBinding implements Disposable {
 
     if (f.superseded) {
       if (ok) this.recover('edit applied although a local change came first');
+      else this.log('remote edit superseded by a local change; retrying');
       this.settle();
       return;
     }
