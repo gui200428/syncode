@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 export type StatusState =
   | { kind: 'idle' }
   | { kind: 'hosting'; pin: string; guests: number; following?: string }
-  | { kind: 'guest'; hostName: string; rootName: string; following?: string }
+  | { kind: 'guest'; hostName: string; rootName: string; following?: string; reconnecting?: boolean }
   | { kind: 'connecting'; address: string };
 
 export class StatusBar implements vscode.Disposable {
@@ -29,6 +29,12 @@ export class StatusBar implements vscode.Disposable {
         break;
       }
       case 'guest':
+        if (state.reconnecting) {
+          this.item.text = `$(sync~spin) LanPair: reconnecting to ${state.hostName}…`;
+          this.item.tooltip = 'Connection lost. Your edits are kept and merged when it comes back.';
+          this.item.command = 'lanpair.showMenu';
+          break;
+        }
         this.item.text = `$(plug) LanPair: ${state.hostName} · ${state.rootName}${state.following ? ` · following ${state.following}` : ''}`;
         this.item.tooltip = 'Click to follow a participant or leave the session';
         this.item.command = 'lanpair.showMenu';

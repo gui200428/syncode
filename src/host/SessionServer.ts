@@ -58,6 +58,8 @@ export interface SessionServerOptions {
   log?: (message: string) => void;
   maxPinAttempts?: number;
   helloTimeoutMs?: number;
+  /** Ping interval; a guest that misses two pings is dropped. Default 10 s. */
+  heartbeatMs?: number;
 }
 
 export interface GuestInfo {
@@ -131,6 +133,8 @@ export class SessionServer implements Disposable {
   private nextGuestId = 1;
   private readonly log: (message: string) => void;
   private readonly maxPinAttempts: number;
+  private readonly alive = new WeakSet<WebSocket>();
+  private readonly heartbeat: ReturnType<typeof setInterval>;
 
   static start(options: SessionServerOptions): Promise<SessionServer> {
     return new Promise((resolve, reject) => {
@@ -153,6 +157,17 @@ export class SessionServer implements Disposable {
     wss.on('connection', (ws, req) => this.accept(ws, req.socket.remoteAddress ?? 'unknown'));
     wss.on('error', (err) => this.log(`server error: ${err.message}`));
     options.awareness.on('update', this.onAwarenessUpdate);
+    // Detect guests that vanished without closing (Wi-Fi drop, sleep).
+    this.heartbeat = setInterval(() => {
+      for (const ws of wss.clients) {
+        if (!this.alive.has(ws)) {
+          ws.terminate();
+          continue;
+        }
+        this.alive.delete(ws);
+        ws.ping();
+      }
+    }, options.heartbeatMs ?? 10_000);
   }
 
   private readonly onAwarenessUpdate = (
@@ -186,7 +201,13 @@ export class SessionServer implements Disposable {
     return { dispose: () => this.guestListeners.delete(listener) };
   }
 
+  /** Test hook: cuts every guest connection as a network failure would. */
+  simulateNetworkDrop(): void {
+    for (const ws of this.wss.clients) ws.terminate();
+  }
+
   dispose(): void {
+    clearInterval(this.heartbeat);
     this.options.awareness.off('update', this.onAwarenessUpdate);
     for (const c of this.connections) c.close(1001, 'session ended');
     for (const ws of this.wss.clients) ws.terminate();
@@ -200,6 +221,8 @@ export class SessionServer implements Disposable {
   }
 
   private accept(ws: WebSocket, address: string): void {
+    this.alive.add(ws);
+    ws.on('pong', () => this.alive.add(ws));
     if ((this.failures.get(address) ?? 0) >= this.maxPinAttempts) {
       this.log(`refused blocked address ${address}`);
       this.reject(ws, { code: 'blocked', message: 'Too many wrong PINs; ask the host to start a new session.' });

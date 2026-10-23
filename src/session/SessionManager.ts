@@ -391,11 +391,16 @@ export class SessionManager implements vscode.Disposable {
         hostName: client.welcome.hostName,
         rootName: client.welcome.rootName,
         following: cursors.followed?.user.name,
+        reconnecting: !client.isConnected,
       });
+    const stateChanged = client.onDidChangeState((state) => {
+      this.log.appendLine(`[guest] ${state === 'connected' ? 'reconnected' : 'connection lost, reconnecting…'}`);
+      updateStatus();
+    });
     const closed = client.onDidClose((reason) => {
       if (this.state.kind === 'guest' && this.state.client === client) {
         this.stop(reason);
-        void vscode.window.showWarningMessage(`LanPair: disconnected from host (${reason}).`);
+        void vscode.window.showWarningMessage(`LanPair: session ended (${reason}).`);
       }
     });
     this.state = {
@@ -404,6 +409,7 @@ export class SessionManager implements vscode.Disposable {
       cursors,
       disposables: [
         new vscode.Disposable(() => closed.dispose()),
+        new vscode.Disposable(() => stateChanged.dispose()),
         this.fs.onDidChangeBindings(() => cursors.refresh()),
         cursors.onDidChangeFollow(updateStatus),
       ],

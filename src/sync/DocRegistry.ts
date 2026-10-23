@@ -36,6 +36,12 @@ export class DocRegistry implements Disposable {
   readonly awareness = new Awareness(this.presenceDoc);
 
   private readonly slots = new Map<string, Slot>();
+
+  /**
+   * With `retain`, documents stay alive at zero references until dispose().
+   * The host uses it so a guest that reconnects merges into the same Y.Doc.
+   */
+  constructor(private readonly options: { retain?: boolean } = {}) {}
   private readonly addListeners = new Set<Listener>();
   private readonly removeListeners = new Set<Listener>();
 
@@ -65,7 +71,9 @@ export class DocRegistry implements Disposable {
   release(path: string): void {
     const key = normalizeDocPath(path);
     const slot = this.slots.get(key);
-    if (!slot || --slot.refs > 0) return;
+    if (!slot) return;
+    slot.refs = Math.max(0, slot.refs - 1);
+    if (slot.refs > 0 || this.options.retain) return;
     this.slots.delete(key);
     for (const l of this.removeListeners) l(slot);
     slot.doc.destroy();

@@ -18,7 +18,8 @@ interface Bound {
  * through the normal editor save.
  */
 export class HostDocuments implements HostDocs, vscode.Disposable {
-  readonly registry = new DocRegistry();
+  /** Documents live for the whole session, so reconnecting guests merge safely. */
+  readonly registry = new DocRegistry({ retain: true });
   private readonly bound = new Map<string, Bound>();
   private readonly realPaths = new Map<string, string>();
   private readonly subscriptions: vscode.Disposable[] = [];
