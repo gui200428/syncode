@@ -1,12 +1,16 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
-import { RemoteError } from '../protocol';
+import { GlobSet } from '../glob';
+import { RemoteError, type FileStatResult, type FileKind } from '../protocol';
 import { normalizeDocPath } from '../sync/DocRegistry';
 
 const BINARY_SNIFF_BYTES = 8000;
+/** Largest file a guest can read raw (binary or oversized files, read-only). */
+export const MAX_RAW_READ_BYTES = 16 * 1024 * 1024;
 
 export interface WorkspaceIndexOptions {
   maxFileBytes: number;
+  exclude?: readonly string[];
 }
 
 function isInside(root: string, candidate: string): boolean {
@@ -21,12 +25,18 @@ function isInside(root: string, candidate: string): boolean {
  */
 export class WorkspaceIndex {
   private realRoot: Promise<string>;
+  private readonly excluded: GlobSet;
 
   constructor(
     readonly root: string,
     private readonly options: WorkspaceIndexOptions,
   ) {
     this.realRoot = fs.realpath(root);
+    this.excluded = new GlobSet(options.exclude ?? []);
+  }
+
+  isExcluded(relPath: string, isDirectory = false): boolean {
+    return relPath !== '' && this.excluded.matches(normalizeDocPath(relPath), isDirectory);
   }
 
   /** Validates a guest-supplied relative path and returns its real absolute path. */
@@ -40,6 +50,15 @@ export class WorkspaceIndex {
     const normalized = normalizeDocPath(relPath);
     if (normalized.split('/').includes('..')) {
       throw new RemoteError('outside-root', 'path escapes the shared folder');
+    }
+    // Excluded if the path itself or any parent folder matches lanpair.exclude.
+    const segments = normalized.split('/');
+    for (let i = 1; i <= segments.length; i++) {
+      const prefix = segments.slice(0, i).join('/');
+      const leaf = i === segments.length;
+      if (this.isExcluded(prefix, true) || (leaf && this.isExcluded(prefix, false))) {
+        throw new RemoteError('not-found', `not found: ${normalized}`);
+      }
     }
     const lexical = path.resolve(this.root, normalized);
     if (!isInside(path.resolve(this.root), lexical)) {
@@ -73,6 +92,51 @@ export class WorkspaceIndex {
     }
     if (await looksBinary(real)) throw new RemoteError('binary', 'binary files are not synced');
     return real;
+  }
+
+  async stat(relPath: string): Promise<FileStatResult> {
+    const real = await this.resolve(relPath);
+    const st = await fs.stat(real);
+    const kind: FileKind = st.isDirectory() ? 'directory' : 'file';
+    const syncable =
+      kind === 'file' && st.size <= this.options.maxFileBytes && !(await looksBinary(real).catch(() => true));
+    return { kind, size: st.size, mtime: Math.round(st.mtimeMs), ctime: Math.round(st.ctimeMs), syncable };
+  }
+
+  /** Directory entries, without excluded entries and links that leave the root. */
+  async list(relPath: string): Promise<Array<[string, FileKind]>> {
+    const real = await this.resolve(relPath);
+    const base = normalizeDocPath(relPath);
+    const realRoot = await this.realRoot;
+    const entries = await fs.readdir(real, { withFileTypes: true });
+    const result: Array<[string, FileKind]> = [];
+    for (const e of entries) {
+      const child = base ? `${base}/${e.name}` : e.name;
+      let isDir = e.isDirectory();
+      if (e.isSymbolicLink()) {
+        try {
+          const target = await fs.realpath(path.join(real, e.name));
+          if (!isInside(realRoot, target)) continue;
+          isDir = (await fs.stat(target)).isDirectory();
+        } catch {
+          continue; // dangling link
+        }
+      } else if (!e.isFile() && !isDir) {
+        continue; // sockets, fifos...
+      }
+      if (this.isExcluded(child, isDir)) continue;
+      result.push([e.name, isDir ? 'directory' : 'file']);
+    }
+    return result;
+  }
+
+  /** Raw bytes for read-only display of files that are not synced as text. */
+  async readRaw(relPath: string): Promise<Uint8Array> {
+    const real = await this.resolve(relPath);
+    const st = await fs.stat(real);
+    if (!st.isFile()) throw new RemoteError('not-a-file', `not a file: ${relPath}`);
+    if (st.size > MAX_RAW_READ_BYTES) throw new RemoteError('too-large', 'file is too large to open remotely');
+    return fs.readFile(real);
   }
 
   /** Workspace-relative docId for a real (symlink-free) path inside the root, or undefined. */

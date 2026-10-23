@@ -4,8 +4,8 @@ import { WorkspaceIndex } from '../../src/host/WorkspaceIndex';
 import { DocRegistry } from '../../src/sync/DocRegistry';
 
 /** HostDocs over a plain folder, without an editor: Y.Docs are seeded from disk. */
-export function folderHostDocs(root: string, maxFileBytes = 2 * 1024 * 1024) {
-  const index = new WorkspaceIndex(root, { maxFileBytes });
+export function folderHostDocs(root: string, maxFileBytes = 2 * 1024 * 1024, exclude: string[] = []) {
+  const index = new WorkspaceIndex(root, { maxFileBytes, exclude });
   const registry = new DocRegistry();
   const saved: string[] = [];
   const docs: HostDocs = {
@@ -21,6 +21,9 @@ export function folderHostDocs(root: string, maxFileBytes = 2 * 1024 * 1024) {
     async save(path) {
       saved.push(path);
     },
+    stat: (path) => index.stat(path),
+    list: (path) => index.list(path),
+    read: (path) => index.readRaw(path),
   };
   return { docs, registry, index, saved };
 }

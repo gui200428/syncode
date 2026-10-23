@@ -9,7 +9,7 @@
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** Max size of a single frame; files are limited to a few MB of text. */
 export const MAX_FRAME_BYTES = 32 * 1024 * 1024;
@@ -61,6 +61,17 @@ export interface RejectPayload {
   attemptsLeft?: number;
 }
 
+export type FileKind = 'file' | 'directory';
+
+export interface FileStatResult {
+  kind: FileKind;
+  size: number;
+  mtime: number;
+  ctime: number;
+  /** Text file within the size limit: edited live. Otherwise read-only. */
+  syncable: boolean;
+}
+
 export interface RequestMap {
   /**
    * Start syncing a file; the guest then exchanges SyncStep1/2 for the returned
@@ -71,6 +82,11 @@ export interface RequestMap {
   close: { params: { path: string }; result: Record<string, never> };
   /** Ask the host to write the file to disk. */
   save: { params: { path: string }; result: Record<string, never> };
+  stat: { params: { path: string }; result: FileStatResult };
+  /** Directory entries as [name, kind]. */
+  list: { params: { path: string }; result: { entries: Array<[string, FileKind]> } };
+  /** Raw content (base64) of a file that is not synced, for read-only display. */
+  read: { params: { path: string }; result: { base64: string } };
 }
 
 export type RequestMethod = keyof RequestMap;
@@ -87,10 +103,12 @@ export interface ResponsePayload {
   error?: { code: string; message: string };
 }
 
-export interface NotifyPayload {
-  event: 'saved';
+export interface FsChange {
   path: string;
+  type: 'created' | 'changed' | 'deleted';
 }
+
+export type NotifyPayload = { event: 'saved'; path: string } | { event: 'fs'; changes: FsChange[] };
 
 export function encodeFrame(type: MsgType, docId: string, payload: Uint8Array): Uint8Array {
   const e = encoding.createEncoder();

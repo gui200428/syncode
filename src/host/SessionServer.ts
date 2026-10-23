@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
+import * as awarenessProtocol from 'y-protocols/awareness';
 import * as syncProtocol from 'y-protocols/sync';
 import {
   decodeFrame,
@@ -13,6 +14,8 @@ import {
   PROTOCOL_VERSION,
   ProtocolError,
   RemoteError,
+  type FileKind,
+  type FileStatResult,
   type HelloPayload,
   type NotifyPayload,
   type RejectPayload,
@@ -35,6 +38,10 @@ export interface HostDocs {
   close(path: string): void;
   /** Writes the document to disk. */
   save(path: string): Promise<void>;
+  stat(path: string): Promise<FileStatResult>;
+  list(path: string): Promise<Array<[string, FileKind]>>;
+  /** Raw bytes of a file that is not synced (binary or too large). */
+  read(path: string): Promise<Uint8Array>;
 }
 
 export interface SessionServerOptions {
@@ -46,6 +53,8 @@ export interface SessionServerOptions {
   hostName: string;
   rootName: string;
   docs: HostDocs;
+  /** Session presence; the host's own state is set on it by RemoteCursors. */
+  awareness: awarenessProtocol.Awareness;
   log?: (message: string) => void;
   maxPinAttempts?: number;
   helloTimeoutMs?: number;
@@ -86,6 +95,8 @@ function isHello(value: unknown): value is HelloPayload {
 class GuestConnection {
   /** Canonical docIds this guest has opened. */
   readonly docs = new Set<string>();
+  /** Awareness client ids announced over this connection. */
+  readonly awarenessIds = new Set<number>();
 
   constructor(
     readonly info: GuestInfo,
@@ -141,7 +152,25 @@ export class SessionServer implements Disposable {
     this.maxPinAttempts = options.maxPinAttempts ?? 5;
     wss.on('connection', (ws, req) => this.accept(ws, req.socket.remoteAddress ?? 'unknown'));
     wss.on('error', (err) => this.log(`server error: ${err.message}`));
+    options.awareness.on('update', this.onAwarenessUpdate);
   }
+
+  private readonly onAwarenessUpdate = (
+    changes: { added: number[]; updated: number[]; removed: number[] },
+    origin: unknown,
+  ): void => {
+    if (origin instanceof GuestConnection) {
+      for (const id of [...changes.added, ...changes.updated]) origin.awarenessIds.add(id);
+      for (const id of changes.removed) origin.awarenessIds.delete(id);
+    }
+    const changed = [...changes.added, ...changes.updated, ...changes.removed];
+    const frame = encodeFrame(
+      MsgType.Awareness,
+      '',
+      awarenessProtocol.encodeAwarenessUpdate(this.options.awareness, changed),
+    );
+    for (const c of this.connections) if (c !== origin) c.send(frame);
+  };
 
   get port(): number {
     const address = this.wss.address();
@@ -158,6 +187,7 @@ export class SessionServer implements Disposable {
   }
 
   dispose(): void {
+    this.options.awareness.off('update', this.onAwarenessUpdate);
     for (const c of this.connections) c.close(1001, 'session ended');
     for (const ws of this.wss.clients) ws.terminate();
     for (const conn of [...this.connections]) this.drop(conn);
@@ -234,6 +264,10 @@ export class SessionServer implements Disposable {
       rootName: this.options.rootName,
     };
     conn.send(jsonFrame(MsgType.Welcome, welcome));
+    const known = [...this.options.awareness.getStates().keys()];
+    if (known.length > 0) {
+      conn.send(encodeFrame(MsgType.Awareness, '', awarenessProtocol.encodeAwarenessUpdate(this.options.awareness, known)));
+    }
     ws.on('message', (d) => this.onMessage(conn, toUint8(d)));
     ws.on('close', () => this.drop(conn));
     this.log(`guest "${info.name}" joined from ${address}`);
@@ -251,7 +285,8 @@ export class SessionServer implements Disposable {
           void this.handleRequest(conn, decodeJson<RequestPayload>(frame.payload));
           break;
         case MsgType.Awareness:
-          break; // presence arrives in Phase 3
+          awarenessProtocol.applyAwarenessUpdate(this.options.awareness, frame.payload, conn);
+          break;
         default:
           throw new ProtocolError(`unexpected message type ${frame.type}`);
       }
@@ -310,6 +345,15 @@ export class SessionServer implements Disposable {
           this.notify(params.path, { event: 'saved', path: params.path });
           return;
         }
+        case 'stat':
+          respond({ result: await this.options.docs.stat(params.path) });
+          return;
+        case 'list':
+          respond({ result: { entries: await this.options.docs.list(params.path) } });
+          return;
+        case 'read':
+          respond({ result: { base64: Buffer.from(await this.options.docs.read(params.path)).toString('base64') } });
+          return;
         default:
           throw new RemoteError('unknown-method', `unknown method ${String(req.method)}`);
       }
@@ -325,6 +369,12 @@ export class SessionServer implements Disposable {
   notify(path: string, payload: NotifyPayload): void {
     const frame = jsonFrame(MsgType.Notify, payload);
     for (const c of this.shared.get(path)?.subscribers ?? []) c.send(frame);
+  }
+
+  /** Sends a notification to every guest. */
+  notifyAll(payload: NotifyPayload): void {
+    const frame = jsonFrame(MsgType.Notify, payload);
+    for (const c of this.connections) c.send(frame);
   }
 
   private subscribe(conn: GuestConnection, entry: DocEntry): void {
@@ -362,6 +412,7 @@ export class SessionServer implements Disposable {
       this.options.docs.close(path);
     }
     conn.docs.clear();
+    awarenessProtocol.removeAwarenessStates(this.options.awareness, [...conn.awarenessIds], 'disconnect');
     this.log(`guest "${conn.info.name}" left`);
     this.emitGuests();
   }

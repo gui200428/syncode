@@ -37,7 +37,10 @@ describe('SessionServer / SessionClient', () => {
     mkdirSync(join_(root, 'src'));
     writeFileSync(join_(root, 'src', 'main.ts'), 'const a = 1;\r\nconst b = 2;\r\n');
     writeFileSync(join_(root, 'blob.bin'), Buffer.from([0, 1, 2]));
-    host = folderHostDocs(root);
+    writeFileSync(join_(root, 'secret.env'), 'KEY=1');
+    mkdirSync(join_(root, 'node_modules'));
+    writeFileSync(join_(root, 'node_modules', 'dep.js'), '');
+    host = folderHostDocs(root, 2 * 1024 * 1024, ['**/node_modules/**', '*.env']);
     server = await SessionServer.start({
       port: 0,
       host: '127.0.0.1',
@@ -46,6 +49,7 @@ describe('SessionServer / SessionClient', () => {
       hostName: 'Host',
       rootName: 'proj',
       docs: host.docs,
+      awareness: host.registry.awareness,
       helloTimeoutMs: 300,
     });
   });
@@ -153,11 +157,41 @@ describe('SessionServer / SessionClient', () => {
     await g1.openDoc('src/main.ts');
     await g2.openDoc('src/main.ts');
     const notified: string[] = [];
-    g2.onDidNotify((n) => notified.push(`${n.event}:${n.path}`));
+    g2.onDidNotify((n) => notified.push(n.event === 'saved' ? `saved:${n.path}` : n.event));
     await g1.save('src/main.ts');
     expect(host.saved).toEqual(['src/main.ts']);
     await until(() => notified.length === 1);
     expect(notified).toEqual(['saved:src/main.ts']);
+  });
+
+  it('lists, stats and reads files, hiding excluded ones', async () => {
+    const c = await join();
+    const rootEntries = await c.list('');
+    expect(rootEntries).toEqual(expect.arrayContaining([['src', 'directory'], ['blob.bin', 'file']]));
+    expect(rootEntries.map((e) => e[0])).not.toContain('node_modules');
+    expect(rootEntries.map((e) => e[0])).not.toContain('secret.env');
+    await expect(c.list('node_modules')).rejects.toMatchObject({ code: 'not-found' });
+    await expect(c.openDoc('secret.env')).rejects.toMatchObject({ code: 'not-found' });
+    expect(await c.stat('src/main.ts')).toMatchObject({ kind: 'file', syncable: true });
+    expect(await c.stat('blob.bin')).toMatchObject({ kind: 'file', syncable: false });
+    expect(await c.stat('')).toMatchObject({ kind: 'directory' });
+    expect([...(await c.read('blob.bin'))]).toEqual([0, 1, 2]);
+    await expect(c.read('../x')).rejects.toMatchObject({ code: 'outside-root' });
+  });
+
+  it('relays presence between host and guests and clears it when a guest leaves', async () => {
+    host.registry.awareness.setLocalState({ user: { name: 'Host' } });
+    const g1 = await join(PIN, 'g1');
+    await until(() => g1.registry.awareness.getStates().size === 2);
+    const g2 = await join(PIN, 'g2');
+    g2.registry.awareness.setLocalState({ user: { name: 'g2' }, file: 'src/main.ts' });
+    await until(() => g1.registry.awareness.getStates().size === 3);
+    const names = () => [...g1.registry.awareness.getStates().values()].map((s) => (s as { user?: { name: string } }).user?.name);
+    await until(() => names().includes('g2'));
+    g2.dispose();
+    await until(() => g1.registry.awareness.getStates().size === 2);
+    // g1 never published a state, so the host only knows itself again.
+    await until(() => host.registry.awareness.getStates().size === 1);
   });
 
   it('closes the guest session when the host stops', async () => {

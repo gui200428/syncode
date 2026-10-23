@@ -1,6 +1,7 @@
 import * as decoding from 'lib0/decoding';
 import * as encoding from 'lib0/encoding';
 import { WebSocket } from 'ws';
+import * as awarenessProtocol from 'y-protocols/awareness';
 import * as syncProtocol from 'y-protocols/sync';
 import { toUint8 } from '../host/SessionServer';
 import {
@@ -12,6 +13,8 @@ import {
   MsgType,
   PROTOCOL_VERSION,
   RemoteError,
+  type FileKind,
+  type FileStatResult,
   type HelloPayload,
   type NotifyPayload,
   type RejectCode,
@@ -128,10 +131,20 @@ export class SessionClient implements Disposable {
     options: SessionClientOptions,
   ) {
     this.log = options.log ?? (() => {});
+    this.registry.awareness.on('update', this.onAwarenessUpdate);
     ws.on('message', (data) => this.onMessage(toUint8(data)));
     ws.on('close', (code, reason) => this.onClose(`${code} ${reason.toString()}`.trim()));
     ws.on('error', (err) => this.log(`connection error: ${err.message}`));
   }
+
+  private readonly onAwarenessUpdate = (
+    changes: { added: number[]; updated: number[]; removed: number[] },
+    origin: unknown,
+  ): void => {
+    if (origin === this) return; // came from the host
+    const changed = [...changes.added, ...changes.updated, ...changes.removed];
+    this.send(encodeFrame(MsgType.Awareness, '', awarenessProtocol.encodeAwarenessUpdate(this.registry.awareness, changed)));
+  };
 
   get isOpen(): boolean {
     return !this.closed;
@@ -193,6 +206,18 @@ export class SessionClient implements Disposable {
   /** Canonical docId for a path previously passed to openDoc(). */
   canonicalPath(path: string): string | undefined {
     return this.aliases.get(normalizeDocPath(path));
+  }
+
+  stat(path: string): Promise<FileStatResult> {
+    return this.request('stat', { path: normalizeDocPath(path) });
+  }
+
+  async list(path: string): Promise<Array<[string, FileKind]>> {
+    return (await this.request('list', { path: normalizeDocPath(path) })).entries;
+  }
+
+  async read(path: string): Promise<Uint8Array> {
+    return Buffer.from((await this.request('read', { path: normalizeDocPath(path) })).base64, 'base64');
   }
 
   async save(path: string): Promise<void> {
@@ -259,7 +284,8 @@ export class SessionClient implements Disposable {
           return;
         }
         case MsgType.Awareness:
-          return; // presence arrives in Phase 3
+          awarenessProtocol.applyAwarenessUpdate(this.registry.awareness, frame.payload, this);
+          return;
         default:
           this.log(`ignoring unexpected message type ${frame.type}`);
       }
@@ -275,6 +301,10 @@ export class SessionClient implements Disposable {
     this.requests.clear();
     for (const doc of this.docs.values()) doc.dispose();
     this.docs.clear();
+    const awareness = this.registry.awareness;
+    awareness.off('update', this.onAwarenessUpdate);
+    const remote = [...awareness.getStates().keys()].filter((id) => id !== awareness.clientID);
+    awarenessProtocol.removeAwarenessStates(awareness, remote, 'disconnect');
     for (const l of this.closeListeners) l(reason);
   }
 }
