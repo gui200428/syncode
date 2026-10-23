@@ -1,10 +1,13 @@
-import { randomBytes, randomInt } from 'node:crypto';
+import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { askIdentity, lanAddresses, readConfig } from '../config';
 import { advertise, browse, type DiscoveredSession } from '../discovery/mdns';
 import { remoteUri, SCHEME, type LanPairFs } from '../guest/LanPairFs';
+import { MirrorDisk, type SyncResult } from '../guest/MirrorDisk';
+import { isOpenInEditor, MirrorWorkspace } from '../guest/MirrorWorkspace';
 import { JoinError, SessionClient } from '../guest/SessionClient';
 import { HostDocuments } from '../host/HostDocuments';
 import { SessionServer } from '../host/SessionServer';
@@ -41,10 +44,27 @@ type State =
       undo: LocalUndo;
       disposables: vscode.Disposable[];
     }
-  | { kind: 'guest'; client: SessionClient; cursors: RemoteCursors; undo: LocalUndo; disposables: vscode.Disposable[] };
+  | {
+      kind: 'guest';
+      client: SessionClient;
+      cursors: RemoteCursors;
+      undo: LocalUndo;
+      /** Set in mirror mode; otherwise the session is shown through LanPairFs. */
+      mirror?: MirrorWorkspace;
+      disposables: vscode.Disposable[];
+    };
+
+/** Join info kept for a mirror folder, so the window reconnects when it opens. */
+interface MirrorTarget extends JoinTarget {
+  sessionId: string;
+}
+
+type GuestMode = 'virtual' | 'mirror';
 
 const LAST_ADDRESS_KEY = 'lanpair.lastAddress';
+const GUEST_MODE_KEY = 'lanpair.lastGuestMode';
 const secretKey = (sessionId: string) => `lanpair.join.${sessionId}`;
+const mirrorKey = (folder: string) => `lanpair.mirror.${folder}`;
 
 export function parseAddress(input: string): { host: string; port: number } | undefined {
   const m = /^\s*\[?([^\]\s]+?)\]?:(\d{1,5})\s*$/.exec(input);
@@ -333,6 +353,12 @@ export class SessionManager implements vscode.Disposable {
         this.becomeGuest(client);
         return true;
       }
+      const mode = await this.askGuestMode(client.welcome.rootName);
+      if (mode === 'mirror') return this.joinMirror(client, joinTarget);
+      if (!mode) {
+        client.dispose();
+        return false;
+      }
       await this.context.secrets.store(secretKey(sessionId), JSON.stringify(joinTarget));
       client.dispose();
       const hasFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 0 || !!vscode.workspace.workspaceFile;
@@ -341,10 +367,11 @@ export class SessionManager implements vscode.Disposable {
     }
   }
 
-  /** On activation: reconnect if this window's workspace is a LanPair folder. */
+  /** On activation: reconnect if this window's workspace is a LanPair folder or a mirror. */
   resumeFromWorkspace(): Promise<void> {
     const folder = vscode.workspace.workspaceFolders?.find((f) => f.uri.scheme === SCHEME);
-    if (!folder || this.state.kind !== 'idle') return Promise.resolve();
+    if (!folder) return this.resumeMirror();
+    if (this.state.kind !== 'idle') return Promise.resolve();
     const sessionId = folder.uri.authority;
     // Registered synchronously, so the workbench's first reads wait for us.
     let settle!: (client: SessionClient | undefined) => void;
@@ -400,6 +427,194 @@ export class SessionManager implements vscode.Disposable {
     if (action === 'Close Folder') await vscode.commands.executeCommand('workbench.action.closeFolder');
   }
 
+  // Mirror mode
+
+  private async askGuestMode(rootName: string): Promise<GuestMode | undefined> {
+    type Item = vscode.QuickPickItem & { mode: GuestMode };
+    const items: Item[] = [
+      {
+        label: '$(remote-explorer) Open the shared folder',
+        description: 'nothing is written to this machine',
+        detail: 'Files are read from the host. Language features that need files on disk do not work.',
+        mode: 'virtual',
+      },
+      {
+        label: '$(folder-opened) Mirror into a local folder',
+        description: 'IntelliSense, terminals and tools work',
+        detail: "The host's files are copied to a folder you pick and kept in sync while you are connected.",
+        mode: 'mirror',
+      },
+    ];
+    if (this.context.globalState.get<GuestMode>(GUEST_MODE_KEY) === 'mirror') items.reverse();
+    const pick = await vscode.window.showQuickPick(items, {
+      title: `LanPair: Join "${rootName}"`,
+      placeHolder: 'How do you want to open the shared folder?',
+      ignoreFocusOut: true,
+    });
+    if (pick) await this.context.globalState.update(GUEST_MODE_KEY, pick.mode);
+    return pick?.mode;
+  }
+
+  private async pickMirrorFolder(rootName: string): Promise<vscode.Uri | undefined> {
+    const current = vscode.workspace.workspaceFolders?.[0]?.uri;
+    const picked = await vscode.window.showOpenDialog({
+      canSelectFolders: true,
+      canSelectFiles: false,
+      canSelectMany: false,
+      openLabel: 'Mirror Here',
+      title: `LanPair: folder for "${rootName}" (empty, or a clone of the same project)`,
+      defaultUri: current?.scheme === 'file' ? current : undefined,
+    });
+    const folder = picked?.[0];
+    if (!folder) return undefined;
+    if (folder.fsPath === os.homedir() || path.parse(folder.fsPath).root === folder.fsPath) {
+      void vscode.window.showErrorMessage('LanPair: pick a project folder, not your home or root folder.');
+      return undefined;
+    }
+    return folder;
+  }
+
+  private async joinMirror(client: SessionClient, target: JoinTarget): Promise<boolean> {
+    const folder = await this.pickMirrorFolder(client.welcome.rootName);
+    if (!folder) {
+      client.dispose();
+      return false;
+    }
+    const record: MirrorTarget = { ...target, sessionId: client.welcome.sessionId };
+    await this.context.secrets.store(mirrorKey(folder.fsPath), JSON.stringify(record));
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length === 1 && folders[0]!.uri.scheme === 'file' && folders[0]!.uri.fsPath === folder.fsPath) {
+      await this.startMirror(client, folder);
+      return true;
+    }
+    // The window opened on the folder reconnects with the stored join info.
+    client.dispose();
+    const hasFolder = folders.length > 0 || !!vscode.workspace.workspaceFile;
+    await vscode.commands.executeCommand('vscode.openFolder', folder, { forceNewWindow: hasFolder });
+    return true;
+  }
+
+  /** The single local folder of this window, if it is (or was) a mirror. */
+  private async mirrorFolder(): Promise<{ root: vscode.Uri; target: MirrorTarget } | undefined> {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length !== 1 || folders[0]!.uri.scheme !== 'file') return undefined;
+    const root = folders[0]!.uri;
+    const stored = (await this.context.secrets.get(mirrorKey(root.fsPath))) ?? process.env.LANPAIR_TEST_MIRROR;
+    return stored ? { root, target: JSON.parse(stored) as MirrorTarget } : undefined;
+  }
+
+  private async resumeMirror(): Promise<void> {
+    if (this.state.kind !== 'idle') return;
+    const mirror = await this.mirrorFolder();
+    if (mirror) await this.reconnectMirror(mirror.root, mirror.target);
+  }
+
+  /** Command: reconnect this mirror folder after it went offline. */
+  async reconnectMirrorCommand(): Promise<void> {
+    const mirror = this.state.kind === 'idle' ? await this.mirrorFolder() : undefined;
+    if (!mirror) {
+      void vscode.window.showWarningMessage('LanPair: this window is not a mirror folder (or a session is running).');
+      return;
+    }
+    await this.reconnectMirror(mirror.root, mirror.target);
+  }
+
+  private async reconnectMirror(root: vscode.Uri, target: MirrorTarget): Promise<void> {
+    const key = mirrorKey(root.fsPath);
+    let client: SessionClient;
+    for (;;) {
+      if (this.state.kind !== 'idle') return;
+      this.state = { kind: 'connecting' };
+      this.status.update({ kind: 'connecting', address: `${target.host}:${target.port}` });
+      try {
+        client = await this.connect(target);
+        this.state = { kind: 'idle' };
+        break;
+      } catch (err) {
+        this.state = { kind: 'idle' };
+        this.status.update({ kind: 'idle' });
+        const wrongPin = err instanceof JoinError && err.code === 'pin';
+        const action = await vscode.window.showWarningMessage(
+          `LanPair: could not reconnect this mirror to ${target.host}:${target.port}: ` +
+            (wrongPin ? 'wrong PIN (the host may have started a new session).' : `${message(err)} The folder stays a local copy.`),
+          wrongPin ? 'Enter PIN…' : 'Retry',
+          'Stop Mirroring',
+        );
+        if (action === 'Stop Mirroring') {
+          await this.context.secrets.delete(key);
+          return;
+        }
+        if (action === 'Enter PIN…') {
+          const pin = await vscode.window.showInputBox({
+            title: 'LanPair: Reconnect Mirror',
+            prompt: `PIN shown by the host (${target.host}:${target.port})`,
+            placeHolder: '6 digits',
+            ignoreFocusOut: true,
+            validateInput: (v) => (/^\d{6}$/.test(v.trim()) ? undefined : 'Enter the 6-digit PIN'),
+          });
+          if (!pin) return;
+          target = { ...target, pin: pin.trim() };
+        } else if (action !== 'Retry') {
+          return;
+        }
+      }
+    }
+    if (client.welcome.sessionId !== target.sessionId) {
+      this.log.appendLine(`[mirror] ${client.welcome.hostName} started a new session; syncing the folder with it`);
+    }
+    await this.context.secrets.store(key, JSON.stringify({ ...target, sessionId: client.welcome.sessionId }));
+    await this.startMirror(client, root);
+  }
+
+  private async confirmReplace(hostName: string, paths: string[]): Promise<boolean> {
+    const shown = paths.slice(0, 8).join(', ') + (paths.length > 8 ? ` and ${paths.length - 8} more` : '');
+    const pick = await vscode.window.showWarningMessage(
+      `LanPair: ${paths.length === 1 ? '1 file' : `${paths.length} files`} in this folder differ from ${hostName}'s version.`,
+      {
+        modal: true,
+        detail: `${shown}\n\nReplace them with the host's files, or keep yours for now (the host's next change to a kept file replaces it).`,
+      },
+      'Replace',
+      'Keep Mine',
+    );
+    return pick === 'Replace';
+  }
+
+  /** Becomes a mirror guest of `client` in the local folder `root` and syncs it. */
+  async startMirror(client: SessionClient, root: vscode.Uri): Promise<SyncResult | undefined> {
+    const log = (m: string) => this.log.appendLine(`[mirror] ${m}`);
+    const manifest = vscode.Uri.joinPath(
+      this.context.globalStorageUri,
+      'mirrors',
+      `${createHash('sha1').update(root.fsPath).digest('hex')}.json`,
+    ).fsPath;
+    const disk = new MirrorDisk(root.fsPath, client, manifest, {
+      isLive: (rel) => isOpenInEditor(root, rel),
+      confirmReplace: (paths) => this.confirmReplace(client.welcome.hostName, paths),
+      log,
+    });
+    const mirror = new MirrorWorkspace(client, root, disk, log);
+    this.becomeGuest(client, mirror);
+    try {
+      const result = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `LanPair: mirroring "${client.welcome.rootName}"…` },
+        () => mirror.start(),
+      );
+      log(`folder in sync (${result.written} written, ${result.deleted} deleted, ${result.kept} kept)`);
+      return result;
+    } catch (err) {
+      if (this.state.kind === 'guest' && this.state.client === client) this.stop();
+      void vscode.window.showErrorMessage(`LanPair: could not mirror the shared folder: ${message(err)}`);
+      return undefined;
+    }
+  }
+
+  /** Test hook: joins and mirrors into `folder` (this window's workspace folder). */
+  async joinMirrorInPlace(target: JoinTarget, folder: vscode.Uri): Promise<SyncResult | undefined> {
+    if (this.state.kind !== 'idle') return undefined;
+    return this.startMirror(await this.connect(target), folder);
+  }
+
   private connect(target: JoinTarget): Promise<SessionClient> {
     const config = readConfig();
     return SessionClient.connect({
@@ -412,11 +627,12 @@ export class SessionManager implements vscode.Disposable {
     });
   }
 
-  private becomeGuest(client: SessionClient): void {
+  private becomeGuest(client: SessionClient, mirror?: MirrorWorkspace): void {
     const config = readConfig();
+    const view = mirror ?? this.fs;
     const cursors = new RemoteCursors(
       client.registry.awareness,
-      this.fs,
+      view,
       { name: config.displayName, color: safeColor(config.color) },
       config.nameLabels,
     );
@@ -427,6 +643,7 @@ export class SessionManager implements vscode.Disposable {
         rootName: client.welcome.rootName,
         following: cursors.followed?.user.name,
         reconnecting: !client.isConnected,
+        mirror: !!mirror,
       });
     const stateChanged = client.onDidChangeState((state) => {
       this.log.appendLine(`[guest] ${state === 'connected' ? 'reconnected' : 'connection lost, reconnecting…'}`);
@@ -438,25 +655,28 @@ export class SessionManager implements vscode.Disposable {
         void vscode.window.showWarningMessage(`LanPair: session ended (${reason}).`);
       }
     });
-    const undo = new LocalUndo(this.fs, config.localUndo);
+    const undo = new LocalUndo(view, config.localUndo);
     this.state = {
       kind: 'guest',
       client,
       cursors,
       undo,
+      mirror,
       disposables: [
         new vscode.Disposable(() => closed.dispose()),
         new vscode.Disposable(() => stateChanged.dispose()),
-        this.fs.onDidChangeBindings(() => {
+        view.onDidChangeBindings(() => {
           cursors.refresh();
           undo.refresh();
         }),
         cursors.onDidChangeFollow(updateStatus),
       ],
     };
-    this.fs.setSession(client);
+    if (!mirror) this.fs.setSession(client);
     updateStatus();
-    this.log.appendLine(`[guest] joined ${client.welcome.hostName}'s "${client.welcome.rootName}"`);
+    this.log.appendLine(
+      `[guest] joined ${client.welcome.hostName}'s "${client.welcome.rootName}"${mirror ? ` (mirror in ${mirror.root.fsPath})` : ''}`,
+    );
   }
 
   // Shared commands
@@ -475,7 +695,8 @@ export class SessionManager implements vscode.Disposable {
       ignoreFocusOut: true,
     });
     if (!relPath) return undefined;
-    const uri = remoteUri(client.welcome.sessionId, normalizeDocPath(relPath.trim()));
+    const rel = normalizeDocPath(relPath.trim());
+    const uri = this.state.mirror ? this.state.mirror.uriFor(rel) : remoteUri(client.welcome.sessionId, rel);
     try {
       const document = await vscode.workspace.openTextDocument(uri);
       return await vscode.window.showTextDocument(document, { preview: false });
@@ -523,22 +744,33 @@ export class SessionManager implements vscode.Disposable {
               follow,
               { label: '$(go-to-file) Open Remote File…', command: 'lanpair.openRemoteFile' },
               identity,
-              { label: '$(debug-disconnect) Leave Session', command: 'lanpair.stopSession' },
+              {
+                label: '$(debug-disconnect) Leave Session',
+                command: 'lanpair.stopSession',
+                description: this.state.mirror ? 'the folder keeps the files' : undefined,
+              },
             ]
           : [
               { label: '$(broadcast) Start Hosting', command: 'lanpair.startHosting' },
               { label: '$(plug) Join Session…', command: 'lanpair.joinSession' },
+              ...((await this.mirrorFolder()) ? [{ label: '$(sync) Reconnect Mirror', command: 'lanpair.reconnectMirror' }] : []),
               identity,
             ];
     const pick = await vscode.window.showQuickPick(items, { title: 'LanPair' });
     if (pick) await vscode.commands.executeCommand(pick.command);
   }
 
-  /** Stop Session command: also forgets the guest's join info and closes the LanPair folder. */
+  /**
+   * Stop Session command: also forgets the guest's join info and closes the
+   * LanPair folder. A mirror folder stays open as a plain local copy.
+   */
   async leave(): Promise<void> {
     const state = this.state;
     this.stop();
-    if (state.kind === 'guest') {
+    if (state.kind === 'guest' && state.mirror) {
+      await this.context.secrets.delete(mirrorKey(state.mirror.root.fsPath));
+      void vscode.window.showInformationMessage('LanPair: left the session. This folder keeps the files as a local copy.');
+    } else if (state.kind === 'guest') {
       const sessionId = state.client.welcome.sessionId;
       await this.context.secrets.delete(secretKey(sessionId));
       if (vscode.workspace.workspaceFolders?.some((f) => f.uri.scheme === SCHEME && f.uri.authority === sessionId)) {
@@ -562,7 +794,8 @@ export class SessionManager implements vscode.Disposable {
       for (const d of state.disposables) d.dispose();
       state.cursors.dispose();
       state.undo.dispose();
-      this.fs.setSession(undefined);
+      if (state.mirror) state.mirror.dispose();
+      else this.fs.setSession(undefined);
       state.client.dispose();
       state.client.registry.dispose();
       this.log.appendLine(`[guest] left session${reason ? ` (${reason})` : ''}`);

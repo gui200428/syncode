@@ -179,6 +179,16 @@ describe('SessionServer / SessionClient', () => {
     await expect(c.read('../x')).rejects.toMatchObject({ code: 'outside-root' });
   });
 
+  it('sends the whole tree for mirrors and the raw bytes of text files as saved', async () => {
+    const c = await join();
+    const tree = await c.tree();
+    expect(tree.files.map((f) => f.path).sort()).toEqual(['blob.bin', 'src/main.ts']);
+    expect(tree.dirs).toEqual(['src']);
+    expect(Buffer.from(await c.read('src/main.ts')).toString()).toBe('const a = 1;\r\nconst b = 2;\r\n');
+    await expect(c.tree('../')).rejects.toMatchObject({ code: 'outside-root' });
+    await expect(c.tree('node_modules')).rejects.toMatchObject({ code: 'not-found' });
+  });
+
   it('relays presence between host and guests and clears it when a guest leaves', async () => {
     host.registry.awareness.setLocalState({ user: { name: 'Host' } });
     const g1 = await join(PIN, 'g1');

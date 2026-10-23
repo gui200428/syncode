@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 export type StatusState =
   | { kind: 'idle' }
   | { kind: 'hosting'; pin: string; guests: number; following?: string }
-  | { kind: 'guest'; hostName: string; rootName: string; following?: string; reconnecting?: boolean }
+  | { kind: 'guest'; hostName: string; rootName: string; following?: string; reconnecting?: boolean; mirror?: boolean }
   | { kind: 'connecting'; address: string };
 
 export class StatusBar implements vscode.Disposable {
@@ -35,8 +35,10 @@ export class StatusBar implements vscode.Disposable {
           this.item.command = 'lanpair.showMenu';
           break;
         }
-        this.item.text = `$(plug) LanPair: ${state.hostName} · ${state.rootName}${state.following ? ` · following ${state.following}` : ''}`;
-        this.item.tooltip = 'Click to follow a participant or leave the session';
+        this.item.text = `$(plug) LanPair: ${state.hostName} · ${state.rootName}${state.mirror ? ' (mirror)' : ''}${state.following ? ` · following ${state.following}` : ''}`;
+        this.item.tooltip = state.mirror
+          ? 'Mirroring the shared folder into this local folder. Click to follow a participant or leave the session'
+          : 'Click to follow a participant or leave the session';
         this.item.command = 'lanpair.showMenu';
         break;
       case 'connecting':

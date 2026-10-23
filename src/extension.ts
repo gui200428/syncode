@@ -14,6 +14,8 @@ export interface LanPairApi {
   startHosting(pin: string): Promise<HostingInfo | undefined>;
   /** Joins without reopening the window on the host's folder. */
   join(host: string, port: number, pin: string): Promise<boolean>;
+  /** Joins in mirror mode into `folder` (this window's workspace folder). */
+  joinMirror(host: string, port: number, pin: string, folder: string): Promise<{ written: number; deleted: number; kept: number } | undefined>;
   openRemoteFile(path: string): Promise<vscode.TextEditor | undefined>;
   participants(): Array<{ clientId: number; name: string; file: string | null }>;
   follow(clientId: number | undefined): void;
@@ -46,6 +48,7 @@ export function activate(context: vscode.ExtensionContext): LanPairApi {
     command('lanpair.undo', () => sessions.undo('undo')),
     command('lanpair.redo', () => sessions.undo('redo')),
     command('lanpair.joinSession', () => sessions.join()),
+    command('lanpair.reconnectMirror', () => sessions.reconnectMirrorCommand()),
     command('lanpair.copyJoinInfo', () => sessions.copyJoinInfo()),
     command('lanpair.openRemoteFile', () => sessions.openRemoteFile()),
     command('lanpair.showMenu', () => sessions.showMenu()),
@@ -70,6 +73,7 @@ export function activate(context: vscode.ExtensionContext): LanPairApi {
     recentLogLines: () => output.recentLines(),
     startHosting: (pin) => sessions.startHosting({ pin }),
     join: (host, port, pin) => sessions.join({ host, port, pin }, { inPlace: true }),
+    joinMirror: (host, port, pin, folder) => sessions.joinMirrorInPlace({ host, port, pin }, vscode.Uri.file(folder)),
     openRemoteFile: (path) => sessions.openRemoteFile(path),
     participants: () =>
       (sessions.cursors?.participants() ?? []).map((p) => ({ clientId: p.clientId, name: p.user.name, file: p.file })),
