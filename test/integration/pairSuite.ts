@@ -117,6 +117,7 @@ async function host(lanpair: LanPairApi): Promise<void> {
 
   step('cursors');
   await waitFor('guest has the file open', () => lanpair.participants().some((p) => p.file === FILE));
+  assert.deepEqual(lanpair.participants().map((p) => p.name), ['Bia (guest)']);
   editor.selection = new vscode.Selection(1, 4, 1, 4); // "  re|turn a + b;"
   // The guest put its cursor at the start of line 3.
   await waitFor('guest cursor at 3:0', () =>
@@ -135,12 +136,41 @@ async function host(lanpair: LanPairApi): Promise<void> {
   await waitFor('guest formatted save', () => read('guest-formatted'));
   await waitFor('formatted text on disk', () => readFileSync(sharedUri.fsPath, 'utf8').includes('export const tidy = { a: 1 };\r\n'), 10_000);
   assert.ok(lf(editor.document.getText()).includes('export const tidy = { a: 1 };'));
-  signal('host-format-ok');
   // Guest saves run the host's save participants too; the formatter breaks on
   // the random text below, so turn it off on this side as well.
   await vscode.workspace
     .getConfiguration('editor', { languageId: 'typescript' })
     .update('formatOnSave', false, vscode.ConfigurationTarget.Global, true);
+  signal('host-format-ok');
+
+  step('external change on disk');
+  await waitFor('guest cursor parked', () => read('guest-cursor-parked'));
+  await waitFor('host document clean', () => !editor.document.isDirty, 10_000);
+  const onDisk = readFileSync(sharedUri.fsPath, 'utf8');
+  writeFileSync(sharedUri.fsPath, onDisk.replace('return a + b;', 'return a + b + 0; // changed on disk'));
+  await waitFor('host reloaded the file', () => editor.document.getText().includes('changed on disk'), 15_000);
+  signal('host-disk-changed');
+  await waitFor('guest checked disk change', () => read('guest-disk-ok'));
+
+  step('local undo');
+  const hostEd = await vscode.window.showTextDocument(editor.document);
+  assert.equal(await hostEd.edit((b) => b.insert(new vscode.Position(0, 0), '// HOSTKEEP\n')), true);
+  signal('host-edited-for-undo');
+  await waitFor('guest undid', () => read('guest-undo-done'));
+  await waitFor('guest edit undone on host', () => {
+    const t = editor.document.getText();
+    return t.includes('HOSTKEEP') && !t.includes('GUESTUNDO');
+  });
+
+  step('network drop');
+  lanpair.simulateNetworkDrop();
+  assert.equal(await hostEd.edit((b) => b.insert(new vscode.Position(0, 0), '// HOSTOFFLINE\n')), true);
+  signal('host-dropped');
+  await waitFor('offline edits merged', () => {
+    const t = editor.document.getText();
+    return t.includes('HOSTOFFLINE') && t.includes('GUESTOFFLINE');
+  }, 30_000);
+  signal('host-merged');
 
   step(`typing for ${seconds}s`);
   signal('host-typing');
@@ -167,6 +197,12 @@ async function guest(lanpair: LanPairApi): Promise<void> {
   assert.ok(root && root.scheme === 'lanpair', 'guest window should be on a lanpair:// folder');
   step('reconnecting from the workspace folder');
   await waitFor('session resumed', () => lanpair.sessionKind() === 'guest', 30_000);
+
+  step('mDNS discovery');
+  const { port, sessionId } = JSON.parse(read('host.json')!) as { port: number; sessionId: string };
+  const found = await waitFor('host announced on the LAN', async () => (await lanpair.discoverSessions(3000)).find((s) => s.sessionId === sessionId), 30_000);
+  assert.equal(found.port, port);
+  assert.equal(found.hostName, 'Ana (host)');
 
   step('file tree');
   const entries = new Map(await vscode.workspace.fs.readDirectory(root));
@@ -200,6 +236,8 @@ async function guest(lanpair: LanPairApi): Promise<void> {
     lanpair.remoteHeads().some((h) => h.uri === sharedUri.toString() && h.line === 1 && h.character === 4),
   );
 
+  assert.deepEqual(lanpair.participants().map((p) => p.name), ['Ana (host)']);
+
   step('follow');
   const hostId = lanpair.participants()[0]!.clientId;
   lanpair.follow(hostId);
@@ -227,6 +265,39 @@ async function guest(lanpair: LanPairApi): Promise<void> {
     .update('formatOnSave', false, vscode.ConfigurationTarget.Global, true);
   assert.equal(vscode.workspace.getConfiguration('editor', formatted.document).get('formatOnSave'), false);
 
+  step('external change on disk');
+  const parked = await vscode.window.showTextDocument(editor.document);
+  const lastLine = parked.document.lineCount - 2; // "export const tidy..." line
+  const lastLineText = parked.document.lineAt(lastLine).text;
+  parked.selection = new vscode.Selection(lastLine, 3, lastLine, 3);
+  signal('guest-cursor-parked');
+  await waitFor('host disk change', () => read('host-disk-changed'));
+  await waitFor('disk change reached the guest', () => parked.document.getText().includes('changed on disk'), 15_000);
+  // Only the changed line was replaced: our cursor stays on the same text.
+  assert.equal(parked.document.lineAt(parked.selection.active.line).text, lastLineText);
+  assert.equal(parked.selection.active.character, 3);
+  signal('guest-disk-ok');
+
+  step('local undo');
+  await waitFor('host edited', () => read('host-edited-for-undo'));
+  const docEnd = parked.document.lineAt(parked.document.lineCount - 1).range.end;
+  parked.selection = new vscode.Selection(docEnd, docEnd);
+  await vscode.commands.executeCommand('type', { text: '// GUESTUNDO' });
+  await waitFor('host edit visible', () => parked.document.getText().includes('HOSTKEEP'));
+  await sleep(700); // let the undo capture window close
+  await vscode.commands.executeCommand('lanpair.undo');
+  await waitFor('own edit undone', () => !parked.document.getText().includes('GUESTUNDO'));
+  assert.ok(parked.document.getText().includes('HOSTKEEP'), 'undo reverted the host edit');
+  signal('guest-undo-done');
+
+  step('network drop');
+  await waitFor('host dropped us', () => read('host-dropped'));
+  await waitFor('reconnecting', () => lanpair.guestConnected() === false || read('host-merged') !== undefined, 15_000);
+  await parked.edit((b) => b.insert(new vscode.Position(0, 0), '// GUESTOFFLINE\n'));
+  await waitFor('reconnected', () => lanpair.guestConnected() === true, 30_000);
+  await waitFor('merged', () => read('host-merged'), 30_000);
+  assert.ok(parked.document.getText().includes('HOSTOFFLINE'));
+
   step(`typing for ${seconds}s`);
   await waitFor('host typing', () => read('host-typing'));
   const shared = await vscode.window.showTextDocument(editor.document);
@@ -251,6 +322,8 @@ async function guest(lanpair: LanPairApi): Promise<void> {
 }
 
 export async function run(): Promise<void> {
+  // Distinct names, as asked when hosting/joining interactively.
+  await vscode.workspace.getConfiguration('lanpair').update('displayName', role === 'host' ? 'Ana (host)' : 'Bia (guest)', vscode.ConfigurationTarget.Global);
   const lanpair = await api();
   step(`${vscode.env.appName} ${vscode.version}`);
   if (role === 'host') await host(lanpair);

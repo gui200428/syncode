@@ -104,6 +104,16 @@ export class SessionManager implements vscode.Disposable {
     return this.state.kind === 'hosting' || this.state.kind === 'guest' ? this.state.cursors : undefined;
   }
 
+  /** Test hook: cuts the network connection(s) of the current session. */
+  simulateNetworkDrop(): void {
+    if (this.state.kind === 'hosting') this.state.server.simulateNetworkDrop();
+    if (this.state.kind === 'guest') this.state.client.simulateNetworkDrop();
+  }
+
+  get guestConnected(): boolean | undefined {
+    return this.state.kind === 'guest' ? this.state.client.isConnected : undefined;
+  }
+
   /** Undo/redo own edits in shared editors; native undo elsewhere. */
   async undo(kind: 'undo' | 'redo'): Promise<void> {
     if (this.state.kind === 'hosting' || this.state.kind === 'guest') {

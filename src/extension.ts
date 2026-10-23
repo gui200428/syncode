@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { browse, type DiscoveredSession } from './discovery/mdns';
 import { LanPairFs, SCHEME } from './guest/LanPairFs';
 import { Logger } from './log';
 import { SessionManager, type HostingInfo } from './session/SessionManager';
@@ -18,6 +19,10 @@ export interface LanPairApi {
   follow(clientId: number | undefined): void;
   remoteHeads(): Array<{ name: string; uri: string; line: number; character: number }>;
   sessionKind(): string;
+  /** Sessions announced on the LAN within `ms`. */
+  discoverSessions(ms: number): Promise<DiscoveredSession[]>;
+  simulateNetworkDrop(): void;
+  guestConnected(): boolean | undefined;
   stop(): void;
 }
 
@@ -71,6 +76,17 @@ export function activate(context: vscode.ExtensionContext): LanPairApi {
     follow: (clientId) => sessions.cursors?.follow(clientId),
     remoteHeads: () => sessions.cursors?.remoteHeads() ?? [],
     sessionKind: () => sessions.kind,
+    discoverSessions: (ms) =>
+      new Promise((resolve) => {
+        let latest: DiscoveredSession[] = [];
+        const browser = browse((s) => (latest = s), (m) => output.appendLine(`[mdns] ${m}`));
+        setTimeout(() => {
+          browser.dispose();
+          resolve(latest);
+        }, ms);
+      }),
+    simulateNetworkDrop: () => sessions.simulateNetworkDrop(),
+    guestConnected: () => sessions.guestConnected,
     stop: () => sessions.stop(),
   };
 }

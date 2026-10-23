@@ -4,7 +4,7 @@ Real-time pair editing for Antigravity / Code OSS over the local network.
 Two people on the same LAN edit the same files simultaneously and see each
 other's cursors. Built on Yjs (CRDT); no cloud server, no accounts, no internet.
 
-Status: Phase 3 (file tree, live editing, remote cursors, follow). Discovery/reconnection come in Phase 4. See `PROMPT-claude-code-lanpair.md` for the roadmap.
+Status: Phase 4 (discovery, reconnection, .gitignore, disk changes, local undo). Phase 5 (mirror mode) is optional. See `PROMPT-claude-code-lanpair.md` for the roadmap.
 
 ## Development
 
@@ -42,15 +42,27 @@ Binding warnings go to the "LanPair" output channel.
 Host: open the folder to share, run **LanPair: Start Hosting**. A notification
 shows `IP:port` and a 6-digit PIN (also in the status bar; **Copy Join Info**).
 
-Guest: run **LanPair: Join Session…**, type `IP:port` and the PIN. The host's
+Both: Start Hosting and Join ask for the name (and, the first time, the color)
+shown next to your cursor; change it any time with **LanPair: Set Name and Color**.
+
+Guest: run **LanPair: Join Session…** and pick the host from the list of
+sessions found on the network (mDNS), or enter `IP:port`; then type the PIN. The host's
 folder opens as `lanpair://<session>/` (in this window if it is empty,
 otherwise in a new one) and the Explorer shows the host's files. Text files
 are edited live; binary or oversized files open read-only. Ctrl+S on the guest
 saves the file on the host (the host's save participants, such as format on
 save, run there too).
 
-Both sides see each other's cursors and selections (name label for a few
-seconds after the cursor moves; hover a cursor for the name).
+Both sides see each other's cursors and selections, with the name floating
+above the cursor (`lanpair.nameLabels`: always / whileMoving / never).
+In shared files Ctrl+Z / Ctrl+Shift+Z undo and redo only your own edits
+(`lanpair.localUndo`).
+
+If the connection drops, the guest keeps editing and reconnects on its own
+(1 s → 10 s backoff, heartbeat every 10 s); edits made meanwhile on both
+sides are merged. Files changed on the host's disk (git checkout, external
+formatter) reach the guest as a minimal change, so cursors elsewhere stay put.
+Files ignored by `.gitignore` or `lanpair.exclude` are invisible to guests.
 **LanPair: Follow Participant** follows someone's file and cursor until you
 move your own cursor. Click the status bar item for the session menu.
 
@@ -62,11 +74,12 @@ symbolic links leaving the shared folder (`src/host/WorkspaceIndex.ts`).
 
 ## Known limitations
 
-- Undo/redo uses the editor's native stack, which also undoes edits made by
-  the other participant. `Y.UndoManager` for local-only undo is planned for Phase 4.
-- No mDNS discovery and no automatic reconnection after a dropped connection yet (Phase 4).
-  Reopening the window reconnects using the join info kept in SecretStorage.
-- `.gitignore` is not applied yet (only `lanpair.exclude`); Phase 4.
+- Undo via the Edit menu still uses the editor's native stack (only the
+  keyboard shortcuts are redirected to LanPair's own-edits undo).
+- Linux hosts with ufw (or firewalld) must allow the port; the host shows the
+  `ufw allow` command. Fix `lanpair.port` so the rule keeps working.
+- If the host's file changes on disk while the host has unsaved session edits,
+  the editor keeps the session text (like VS Code does for any dirty file).
 - The guest cannot create, rename or delete files.
 - The guest window applies the host's `.vscode/settings.json` like any workspace
   folder; only join sessions of people you trust.
