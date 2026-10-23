@@ -178,7 +178,9 @@ export function applyDelta(text: string, delta: Delta): string {
  * the same original text (as in a multi-cursor TextDocumentChangeEvent).
  */
 export function fromEdits(edits: readonly OffsetEdit[]): Delta {
-  const sorted = [...edits].sort((x, y) => x.offset - y.offset);
+  // At equal offsets an insertion goes before a removed range (editors can
+  // report both in one event); either order yields the same text.
+  const sorted = [...edits].sort((x, y) => x.offset - y.offset || x.length - y.length);
   const out = new Builder();
   let cursor = 0;
   for (const e of sorted) {
@@ -254,4 +256,42 @@ function isHighSurrogate(c: number): boolean {
 
 function isLowSurrogate(c: number): boolean {
   return c >= 0xdc00 && c <= 0xdfff;
+}
+
+/** Maps an index in the text before `delta` to the text after it. */
+export function transformIndex(delta: Delta, index: number): number {
+  let oldPos = 0;
+  let newPos = 0;
+  for (const op of delta) {
+    if ('retain' in op) {
+      if (index < oldPos + op.retain) return newPos + (index - oldPos);
+      oldPos += op.retain;
+      newPos += op.retain;
+    } else if ('insert' in op) {
+      newPos += op.insert.length;
+    } else {
+      if (index < oldPos + op.delete) return newPos;
+      oldPos += op.delete;
+    }
+  }
+  return newPos + (index - oldPos);
+}
+
+/** Maps an index in the text after `delta` back to the text before it. */
+export function transformIndexBack(delta: Delta, index: number): number {
+  let oldPos = 0;
+  let newPos = 0;
+  for (const op of delta) {
+    if ('retain' in op) {
+      if (index < newPos + op.retain) return oldPos + (index - newPos);
+      oldPos += op.retain;
+      newPos += op.retain;
+    } else if ('insert' in op) {
+      if (index < newPos + op.insert.length) return oldPos;
+      newPos += op.insert.length;
+    } else {
+      oldPos += op.delete;
+    }
+  }
+  return oldPos + (index - newPos);
 }

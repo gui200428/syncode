@@ -39,6 +39,15 @@ describe('delta', () => {
     expect(toEdits(fromEdits(edits))).toEqual([...edits].sort((x, y) => x.offset - y.offset));
   });
 
+  it('accepts an insertion and a deletion at the same offset in any order', () => {
+    const edits = [
+      { offset: 2, length: 1, text: '' },
+      { offset: 2, length: 0, text: '\n' },
+    ];
+    expect(applyDelta('abcd', fromEdits(edits))).toBe('ab\nd');
+    expect(applyDelta('abcd', fromEdits([...edits].reverse()))).toBe('ab\nd');
+  });
+
   it('rejects overlapping edits', () => {
     expect(() => fromEdits([{ offset: 0, length: 3, text: '' }, { offset: 2, length: 1, text: '' }])).toThrow();
   });
@@ -69,6 +78,43 @@ describe('delta', () => {
       const right = applyDelta(applyDelta(s, b), transform(b, a, !p));
       expect(left).toBe(right);
       expect(applyDelta(s, diffText(s, left))).toBe(left);
+    }
+  });
+});
+
+describe('index mapping', () => {
+  it('maps positions through a delta and back', async () => {
+    const { transformIndex, transformIndexBack } = await import('../src/sync/delta');
+    const d = fromEdits([
+      { offset: 0, length: 0, text: '>> ' },
+      { offset: 6, length: 5, text: 'there' },
+    ]); // ">> hello there"
+    expect(transformIndex(d, 0)).toBe(3);
+    expect(transformIndex(d, 4)).toBe(7);
+    expect(transformIndex(d, 8)).toBe(14); // inside the replaced word: end of replacement
+    expect(transformIndex(d, 11)).toBe(14);
+    expect(transformIndexBack(d, 1)).toBe(0); // inside inserted ">> "
+    expect(transformIndexBack(d, 7)).toBe(4);
+    expect(transformIndexBack(d, 14)).toBe(11);
+    // Characters that survive map to the same character.
+    const r = rng(9);
+    for (let i = 0; i < 500; i++) {
+      const s = r.str(10);
+      const delta = randomDelta(r, s);
+      const after = applyDelta(s, delta);
+      const deleted = new Set<number>();
+      for (const e of toEdits(delta)) for (let k = e.offset; k < e.offset + e.length; k++) deleted.add(k);
+      let previous = 0;
+      for (let k = 0; k <= s.length; k++) {
+        const j = transformIndex(delta, k);
+        expect(j).toBeGreaterThanOrEqual(previous); // monotonic
+        expect(j).toBeLessThanOrEqual(after.length);
+        previous = j;
+        if (k < s.length && !deleted.has(k)) {
+          expect(after[j]).toBe(s[k]);
+          expect(transformIndexBack(delta, j)).toBe(k);
+        }
+      }
     }
   });
 });
