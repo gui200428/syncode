@@ -1,4 +1,6 @@
 // Runs pairSuite in two editor instances at once (host + guest on localhost).
+// With the argument `mirror`, runs mirrorSuite instead: the guest window is
+// opened on an empty local folder that it mirrors the host's folder into.
 // LANPAIR_PAIR_SECONDS controls the typing duration (default 120).
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,11 +11,13 @@ import { runTests } from '@vscode/test-electron';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const editor = process.env.LANPAIR_EDITOR ?? '/opt/antigravity-ide/antigravity-ide';
+const mirror = process.argv[2] === 'mirror';
+const suite = mirror ? 'mirrorSuite' : 'pairSuite';
 
 await esbuild.build({
-  entryPoints: [join(root, 'test/integration/pairSuite.ts')],
+  entryPoints: [join(root, `test/integration/${suite}.ts`)],
   bundle: true,
-  outfile: join(root, 'out-test/pairSuite.js'),
+  outfile: join(root, `out-test/${suite}.js`),
   format: 'cjs',
   platform: 'node',
   target: 'node20',
@@ -45,7 +49,7 @@ function launch(role, workspace, extraEnv = {}) {
   return runTests({
     vscodeExecutablePath: editor,
     extensionDevelopmentPath: root,
-    extensionTestsPath: join(root, 'out-test/pairSuite.js'),
+    extensionTestsPath: join(root, `out-test/${suite}.js`),
     launchArgs: [...workspace, ...args],
     extensionTestsEnv: {
       ...extraEnv,
@@ -67,6 +71,13 @@ try {
       await new Promise((r) => setTimeout(r, 200));
     }
     const { port, sessionId } = JSON.parse(readFileSync(signal, 'utf8'));
+    if (mirror) {
+      const mirrorDir = join(scratch, 'guest-mirror');
+      mkdirSync(mirrorDir);
+      return launch('guest', [mirrorDir], {
+        LANPAIR_TEST_MIRROR: JSON.stringify({ host: '127.0.0.1', port, pin: '424242', sessionId }),
+      });
+    }
     return launch('guest', ['--folder-uri', `lanpair://${sessionId}/`], {
       LANPAIR_TEST_JOIN: JSON.stringify({ host: '127.0.0.1', port, pin: '424242' }),
     });
@@ -74,10 +85,10 @@ try {
   const results = await Promise.allSettled([host, guest]);
   const failed = results.filter((r) => r.status === 'rejected');
   if (failed.length) {
-    console.error('Pair test failed:', failed.map((r) => String(r.reason)).join('; '));
+    console.error(`${mirror ? 'Mirror pair' : 'Pair'} test failed:`, failed.map((r) => String(r.reason)).join('; '));
     process.exitCode = 1;
   } else {
-    console.log('Pair test passed.');
+    console.log(`${mirror ? 'Mirror pair' : 'Pair'} test passed.`);
   }
 } finally {
   if (!process.env.LANPAIR_KEEP) rmSync(scratch, { recursive: true, force: true });
