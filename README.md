@@ -4,7 +4,7 @@ Real-time pair editing for Antigravity / Code OSS over the local network.
 Two people on the same LAN edit the same files simultaneously and see each
 other's cursors. Built on Yjs (CRDT); no cloud server, no accounts, no internet.
 
-Status: Phase 5 (mirror mode: the guest can work on a local copy so its language servers work). See `PROMPT-claude-code-syncode.md` for the roadmap.
+Status: Phase 5 (mirror mode: the guest can work on a local copy so its language servers work).
 
 ## Development
 
