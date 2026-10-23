@@ -179,7 +179,7 @@ export class MirrorWorkspace implements DocLocator, vscode.Disposable {
       await this.client.save(rel);
     } catch (err) {
       void vscode.window.showWarningMessage(
-        `LanPair: the host could not save ${rel}: ${err instanceof Error ? err.message : String(err)}`,
+        `SynCode: the host could not save ${rel}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
     await this.disk.markSaved(rel);

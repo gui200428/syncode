@@ -33,7 +33,7 @@ describe('SessionServer / SessionClient', () => {
     });
 
   beforeEach(async () => {
-    root = mkdtempSync(join_(tmpdir(), 'lanpair-session-'));
+    root = mkdtempSync(join_(tmpdir(), 'syncode-session-'));
     mkdirSync(join_(root, 'src'));
     writeFileSync(join_(root, 'src', 'main.ts'), 'const a = 1;\r\nconst b = 2;\r\n');
     writeFileSync(join_(root, 'blob.bin'), Buffer.from([0, 1, 2]));

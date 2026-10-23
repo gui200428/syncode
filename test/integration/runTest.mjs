@@ -1,5 +1,5 @@
 // Runs test/integration/suite.ts inside an editor via @vscode/test-electron.
-// Uses the locally installed Antigravity by default; override with LANPAIR_EDITOR.
+// Uses the locally installed Antigravity by default; override with SYNCODE_EDITOR.
 import { cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -8,7 +8,7 @@ import * as esbuild from 'esbuild';
 import { runTests } from '@vscode/test-electron';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const editor = process.env.LANPAIR_EDITOR ?? '/opt/antigravity-ide/antigravity-ide';
+const editor = process.env.SYNCODE_EDITOR ?? '/opt/antigravity-ide/antigravity-ide';
 
 await esbuild.build({
   entryPoints: [join(root, 'test/integration/suite.ts')],
@@ -22,7 +22,7 @@ await esbuild.build({
 });
 
 // Fresh profile and a scratch copy of the fixtures, so nothing touches the user's setup.
-const scratch = mkdtempSync(join(process.env.LANPAIR_TMP ?? tmpdir(), 'lanpair-it-'));
+const scratch = mkdtempSync(join(process.env.SYNCODE_TMP ?? tmpdir(), 'syncode-it-'));
 const workspace = join(scratch, 'workspace');
 cpSync(join(root, 'test/integration/fixtures'), workspace, { recursive: true });
 

@@ -40,7 +40,7 @@ function laggyLink(from: Y.Doc, to: Y.Doc, minMs: number, maxMs: number): vscode
 export async function startDebugMirror(output: Logger): Promise<vscode.Disposable | undefined> {
   const source = vscode.window.activeTextEditor?.document;
   if (!source) {
-    void vscode.window.showWarningMessage('LanPair: open a text editor first.');
+    void vscode.window.showWarningMessage('SynCode: open a text editor first.');
     return undefined;
   }
   const log = (side: string) => (m: string) => output.appendLine(`[mirror ${side}] ${m}`);

@@ -1,20 +1,20 @@
 /**
  * Two editor instances (host and guest) on one machine. The guest window is
- * opened directly on lanpair://<sessionId>/, as after "Join Session", and
+ * opened directly on syncode://<sessionId>/, as after "Join Session", and
  * reconnects on activation. Covers the file tree, read-only binaries, host
  * file events, remote cursors, Follow Participant, simultaneous typing and
- * saving from the guest. LANPAIR_ROLE selects the side; the two instances
- * coordinate through small files in LANPAIR_PAIR_DIR.
+ * saving from the guest. SYNCODE_ROLE selects the side; the two instances
+ * coordinate through small files in SYNCODE_PAIR_DIR.
  */
 import * as assert from 'node:assert/strict';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { LanPairApi } from '../../src/extension';
+import type { SynCodeApi } from '../../src/extension';
 
-const role = process.env.LANPAIR_ROLE as 'host' | 'guest';
-const dir = process.env.LANPAIR_PAIR_DIR!;
-const seconds = Number(process.env.LANPAIR_PAIR_SECONDS ?? '120');
+const role = process.env.SYNCODE_ROLE as 'host' | 'guest';
+const dir = process.env.SYNCODE_PAIR_DIR!;
+const seconds = Number(process.env.SYNCODE_PAIR_SECONDS ?? '120');
 const PIN = '424242';
 const FILE = 'shared.ts';
 
@@ -37,8 +37,8 @@ function step(name: string): void {
   console.log(`[${role}] ${name}`);
 }
 
-async function api(): Promise<LanPairApi> {
-  const ext = vscode.extensions.getExtension<LanPairApi>('lanpair.lanpair');
+async function api(): Promise<SynCodeApi> {
+  const ext = vscode.extensions.getExtension<SynCodeApi>('syncode.syncode');
   assert.ok(ext);
   return ext.activate();
 }
@@ -95,19 +95,19 @@ async function converge(document: vscode.TextDocument): Promise<void> {
   });
 }
 
-function assertNoProblems(lanpair: LanPairApi): void {
-  const problems = lanpair.recentLogLines().filter((l) => /out of sync|threw|resolved before|error/i.test(l));
+function assertNoProblems(syncode: SynCodeApi): void {
+  const problems = syncode.recentLogLines().filter((l) => /out of sync|threw|resolved before|error/i.test(l));
   assert.deepEqual(problems, []);
 }
 
-async function host(lanpair: LanPairApi): Promise<void> {
+async function host(syncode: SynCodeApi): Promise<void> {
   const folder = vscode.workspace.workspaceFolders![0]!.uri;
-  const info = await lanpair.startHosting(PIN);
+  const info = await syncode.startHosting(PIN);
   assert.ok(info, 'hosting failed');
   signal('host.json', JSON.stringify({ port: info.port, sessionId: info.sessionId }));
 
   step('waiting for the guest');
-  await waitFor('guest connected', () => lanpair.participants().length === 1);
+  await waitFor('guest connected', () => syncode.participants().length === 1);
   const sharedUri = vscode.Uri.joinPath(folder, FILE);
   const editor = await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(sharedUri));
 
@@ -116,12 +116,12 @@ async function host(lanpair: LanPairApi): Promise<void> {
   writeFileSync(path.join(folder.fsPath, 'created-by-host.txt'), 'hi');
 
   step('cursors');
-  await waitFor('guest has the file open', () => lanpair.participants().some((p) => p.file === FILE));
-  assert.deepEqual(lanpair.participants().map((p) => p.name), ['Bia (guest)']);
+  await waitFor('guest has the file open', () => syncode.participants().some((p) => p.file === FILE));
+  assert.deepEqual(syncode.participants().map((p) => p.name), ['Bia (guest)']);
   editor.selection = new vscode.Selection(1, 4, 1, 4); // "  re|turn a + b;"
   // The guest put its cursor at the start of line 3.
   await waitFor('guest cursor at 3:0', () =>
-    lanpair.remoteHeads().some((h) => h.uri === sharedUri.toString() && h.line === 3 && h.character === 0),
+    syncode.remoteHeads().some((h) => h.uri === sharedUri.toString() && h.line === 3 && h.character === 0),
   );
   signal('host-cursor-set');
 
@@ -163,7 +163,7 @@ async function host(lanpair: LanPairApi): Promise<void> {
   });
 
   step('network drop');
-  lanpair.simulateNetworkDrop();
+  syncode.simulateNetworkDrop();
   assert.equal(await hostEd.edit((b) => b.insert(new vscode.Position(0, 0), '// HOSTOFFLINE\n')), true);
   signal('host-dropped');
   await waitFor('offline edits merged', () => {
@@ -186,21 +186,21 @@ async function host(lanpair: LanPairApi): Promise<void> {
   const disk = readFileSync(sharedUri.fsPath, 'utf8');
   assert.equal(lf(disk), lf(editor.document.getText()));
   assert.ok(disk.includes('\r\n') && !/[^\r]\n/.test(disk), 'disk file lost its CRLF line endings');
-  assertNoProblems(lanpair);
+  assertNoProblems(syncode);
   signal('host-done');
   await waitFor('guest done', () => read('guest-done'));
-  lanpair.stop();
+  syncode.stop();
 }
 
-async function guest(lanpair: LanPairApi): Promise<void> {
+async function guest(syncode: SynCodeApi): Promise<void> {
   const root = vscode.workspace.workspaceFolders?.[0]?.uri;
-  assert.ok(root && root.scheme === 'lanpair', 'guest window should be on a lanpair:// folder');
+  assert.ok(root && root.scheme === 'syncode', 'guest window should be on a syncode:// folder');
   step('reconnecting from the workspace folder');
-  await waitFor('session resumed', () => lanpair.sessionKind() === 'guest', 30_000);
+  await waitFor('session resumed', () => syncode.sessionKind() === 'guest', 30_000);
 
   step('mDNS discovery');
   const { port, sessionId } = JSON.parse(read('host.json')!) as { port: number; sessionId: string };
-  const found = await waitFor('host announced on the LAN', async () => (await lanpair.discoverSessions(3000)).find((s) => s.sessionId === sessionId), 30_000);
+  const found = await waitFor('host announced on the LAN', async () => (await syncode.discoverSessions(3000)).find((s) => s.sessionId === sessionId), 30_000);
   assert.equal(found.port, port);
   assert.equal(found.hostName, 'Ana (host)');
 
@@ -233,21 +233,21 @@ async function guest(lanpair: LanPairApi): Promise<void> {
   editor.selection = new vscode.Selection(3, 0, 3, 0);
   await waitFor('host cursor set', () => read('host-cursor-set'));
   await waitFor('host cursor at 1:4', () =>
-    lanpair.remoteHeads().some((h) => h.uri === sharedUri.toString() && h.line === 1 && h.character === 4),
+    syncode.remoteHeads().some((h) => h.uri === sharedUri.toString() && h.line === 1 && h.character === 4),
   );
 
-  assert.deepEqual(lanpair.participants().map((p) => p.name), ['Ana (host)']);
+  assert.deepEqual(syncode.participants().map((p) => p.name), ['Ana (host)']);
 
   step('follow');
-  const hostId = lanpair.participants()[0]!.clientId;
-  lanpair.follow(hostId);
+  const hostId = syncode.participants()[0]!.clientId;
+  syncode.follow(hostId);
   signal('guest-following');
   const followed = await waitFor('followed editor', () => {
     const e = vscode.window.activeTextEditor;
     return e?.document.uri.path.endsWith('/src/util.ts') ? e : undefined;
   });
-  assert.equal(followed.document.uri.scheme, 'lanpair');
-  lanpair.follow(undefined);
+  assert.equal(followed.document.uri.scheme, 'syncode');
+  syncode.follow(undefined);
   signal('guest-followed');
 
   step('save with format on save');
@@ -285,16 +285,16 @@ async function guest(lanpair: LanPairApi): Promise<void> {
   await vscode.commands.executeCommand('type', { text: '// GUESTUNDO' });
   await waitFor('host edit visible', () => parked.document.getText().includes('HOSTKEEP'));
   await sleep(700); // let the undo capture window close
-  await vscode.commands.executeCommand('lanpair.undo');
+  await vscode.commands.executeCommand('syncode.undo');
   await waitFor('own edit undone', () => !parked.document.getText().includes('GUESTUNDO'));
   assert.ok(parked.document.getText().includes('HOSTKEEP'), 'undo reverted the host edit');
   signal('guest-undo-done');
 
   step('network drop');
   await waitFor('host dropped us', () => read('host-dropped'));
-  await waitFor('reconnecting', () => lanpair.guestConnected() === false || read('host-merged') !== undefined, 15_000);
+  await waitFor('reconnecting', () => syncode.guestConnected() === false || read('host-merged') !== undefined, 15_000);
   await parked.edit((b) => b.insert(new vscode.Position(0, 0), '// GUESTOFFLINE\n'));
-  await waitFor('reconnected', () => lanpair.guestConnected() === true, 30_000);
+  await waitFor('reconnected', () => syncode.guestConnected() === true, 30_000);
   await waitFor('merged', () => read('host-merged'), 30_000);
   assert.ok(parked.document.getText().includes('HOSTOFFLINE'));
 
@@ -316,17 +316,17 @@ async function guest(lanpair: LanPairApi): Promise<void> {
   if (!saved) console.log(`[guest] save failed; dirty=${shared.document.isDirty}; changes during save: ${changes.join(' | ') || 'none'}`);
   assert.equal(saved, true, 'guest save failed');
   signal('guest-saved');
-  assertNoProblems(lanpair);
+  assertNoProblems(syncode);
   signal('guest-done');
   await waitFor('host done', () => read('host-done'));
 }
 
 export async function run(): Promise<void> {
   // Distinct names, as asked when hosting/joining interactively.
-  await vscode.workspace.getConfiguration('lanpair').update('displayName', role === 'host' ? 'Ana (host)' : 'Bia (guest)', vscode.ConfigurationTarget.Global);
-  const lanpair = await api();
+  await vscode.workspace.getConfiguration('syncode').update('displayName', role === 'host' ? 'Ana (host)' : 'Bia (guest)', vscode.ConfigurationTarget.Global);
+  const syncode = await api();
   step(`${vscode.env.appName} ${vscode.version}`);
-  if (role === 'host') await host(lanpair);
-  else await guest(lanpair);
+  if (role === 'host') await host(syncode);
+  else await guest(syncode);
   step('OK');
 }

@@ -1,20 +1,20 @@
 /**
  * Mirror mode with two editor instances. The guest window is opened on an
- * empty local folder and reconnects on activation (LANPAIR_TEST_MIRROR), like
+ * empty local folder and reconnects on activation (SYNCODE_TEST_MIRROR), like
  * after "Join Session" → "Mirror into a local folder". Covers the initial
  * copy, host file events, the guest's own language server on the mirror,
  * live editing of open files, saves in both directions, a network drop and
- * simultaneous typing. Coordinates through files in LANPAIR_PAIR_DIR.
+ * simultaneous typing. Coordinates through files in SYNCODE_PAIR_DIR.
  */
 import * as assert from 'node:assert/strict';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { LanPairApi } from '../../src/extension';
+import type { SynCodeApi } from '../../src/extension';
 
-const role = process.env.LANPAIR_ROLE as 'host' | 'guest';
-const dir = process.env.LANPAIR_PAIR_DIR!;
-const seconds = Number(process.env.LANPAIR_PAIR_SECONDS ?? '120');
+const role = process.env.SYNCODE_ROLE as 'host' | 'guest';
+const dir = process.env.SYNCODE_PAIR_DIR!;
+const seconds = Number(process.env.SYNCODE_PAIR_SECONDS ?? '120');
 const PIN = '424242';
 const FILE = 'shared.ts';
 
@@ -34,15 +34,15 @@ async function waitFor<T>(what: string, fn: () => T | undefined | false | Promis
   }
 }
 
-let logOf: LanPairApi | undefined;
+let logOf: SynCodeApi | undefined;
 
 function step(name: string): void {
   // The log line count shows which step a logged problem belongs to.
   console.log(`[${role}] ${new Date().toISOString().slice(11, 23)} ${name}${logOf ? ` (log line ${logOf.recentLogLines().length})` : ''}`);
 }
 
-async function api(): Promise<LanPairApi> {
-  const ext = vscode.extensions.getExtension<LanPairApi>('lanpair.lanpair');
+async function api(): Promise<SynCodeApi> {
+  const ext = vscode.extensions.getExtension<SynCodeApi>('syncode.syncode');
   assert.ok(ext);
   return ext.activate();
 }
@@ -91,8 +91,8 @@ async function converge(document: vscode.TextDocument): Promise<void> {
   });
 }
 
-function assertNoProblems(lanpair: LanPairApi): void {
-  const lines = lanpair.recentLogLines();
+function assertNoProblems(syncode: SynCodeApi): void {
+  const lines = syncode.recentLogLines();
   const problems = lines.filter((l) => /out of sync|threw|resolved before|error|could not/i.test(l));
   if (problems.length > 0) console.log(`[${role}] log:\n${lines.join('\n')}`);
   assert.deepEqual(problems, []);
@@ -105,15 +105,15 @@ async function disableFormatOnSave(): Promise<void> {
     .update('formatOnSave', false, vscode.ConfigurationTarget.Global, true);
 }
 
-async function host(lanpair: LanPairApi): Promise<void> {
+async function host(syncode: SynCodeApi): Promise<void> {
   const folder = vscode.workspace.workspaceFolders![0]!.uri;
   const sharedUri = vscode.Uri.joinPath(folder, FILE);
-  const info = await lanpair.startHosting(PIN);
+  const info = await syncode.startHosting(PIN);
   assert.ok(info, 'hosting failed');
   signal('host.json', JSON.stringify({ port: info.port, sessionId: info.sessionId }));
 
   step('waiting for the guest');
-  await waitFor('guest connected', () => lanpair.participants().length === 1);
+  await waitFor('guest connected', () => syncode.participants().length === 1);
   await waitFor('guest mirrored the folder', () => read('guest-mirrored'));
 
   step('host file events');
@@ -148,7 +148,7 @@ async function host(lanpair: LanPairApi): Promise<void> {
 
   step('network drop');
   await waitFor('guest ready', () => read('guest-ready-drop'));
-  lanpair.simulateNetworkDrop();
+  syncode.simulateNetworkDrop();
   writeFileSync(path.join(folder.fsPath, 'while-offline.txt'), 'offline');
   assert.equal(await hostEd.edit((b) => b.insert(new vscode.Position(0, 0), '// HOSTOFFLINE\n')), true);
   signal('host-dropped');
@@ -175,21 +175,21 @@ async function host(lanpair: LanPairApi): Promise<void> {
   const disk = readFileSync(sharedUri.fsPath, 'utf8');
   assert.equal(lf(disk), lf(editor.document.getText()));
   signal('host-final.txt', disk);
-  assertNoProblems(lanpair);
+  assertNoProblems(syncode);
   signal('host-done');
   await waitFor('guest done', () => read('guest-done'));
-  lanpair.stop();
+  syncode.stop();
 }
 
-async function guest(lanpair: LanPairApi): Promise<void> {
+async function guest(syncode: SynCodeApi): Promise<void> {
   const root = vscode.workspace.workspaceFolders?.[0]?.uri;
   assert.ok(root && root.scheme === 'file', 'guest window should be on a local folder');
   const local = (rel: string) => path.join(root.fsPath, rel);
   const sharedUri = vscode.Uri.joinPath(root, FILE);
 
   step('initial mirror');
-  await waitFor('session resumed', () => lanpair.sessionKind() === 'guest', 30_000);
-  await waitFor('folder in sync', () => lanpair.recentLogLines().some((l) => l.includes('folder in sync')), 30_000);
+  await waitFor('session resumed', () => syncode.sessionKind() === 'guest', 30_000);
+  await waitFor('folder in sync', () => syncode.recentLogLines().some((l) => l.includes('folder in sync')), 30_000);
   const hostShared = readText(local(FILE));
   assert.ok(hostShared?.includes('export function add'), 'shared.ts was not mirrored');
   assert.ok(readText(local('src/util.ts'))?.includes('twice'));
@@ -231,7 +231,7 @@ async function guest(lanpair: LanPairApi): Promise<void> {
   await waitFor('unsaved host edit', () => editor.document.getText().includes('HOSTLIVE'), 15_000);
   assert.equal(editor.document.isDirty, true);
   assert.ok(!readText(local(FILE))!.includes('HOSTLIVE'), 'unsaved host edit written to the mirror');
-  await waitFor('host cursor', () => lanpair.remoteHeads().some((h) => h.uri === sharedUri.toString()), 15_000);
+  await waitFor('host cursor', () => syncode.remoteHeads().some((h) => h.uri === sharedUri.toString()), 15_000);
   editor.selection = new vscode.Selection(1, 0, 1, 0);
   await vscode.commands.executeCommand('type', { text: '// GUESTLIVE\n' });
 
@@ -251,10 +251,10 @@ async function guest(lanpair: LanPairApi): Promise<void> {
   step('network drop');
   signal('guest-ready-drop');
   await waitFor('host dropped us', () => read('host-dropped'));
-  await waitFor('reconnecting', () => lanpair.guestConnected() === false || lanpair.guestConnected() === true, 15_000);
+  await waitFor('reconnecting', () => syncode.guestConnected() === false || syncode.guestConnected() === true, 15_000);
   const ed = await vscode.window.showTextDocument(editor.document);
   assert.equal(await ed.edit((b) => b.insert(new vscode.Position(0, 0), '// GUESTOFFLINE\n')), true);
-  await waitFor('reconnected', () => lanpair.guestConnected() === true, 30_000);
+  await waitFor('reconnected', () => syncode.guestConnected() === true, 30_000);
   await waitFor('offline host edit', () => ed.document.getText().includes('HOSTOFFLINE'), 30_000);
   // Missed while disconnected: picked up by the resync after reconnecting.
   await waitFor('file created while offline', () => readText(local('while-offline.txt')) === 'offline', 30_000);
@@ -278,18 +278,18 @@ async function guest(lanpair: LanPairApi): Promise<void> {
   const final = await waitFor('host final text', () => read('host-final.txt'), 15_000);
   await waitFor('local copy clean', () => !typing.document.isDirty, 10_000);
   assert.equal(lf(readText(local(FILE))!), lf(final));
-  assertNoProblems(lanpair);
+  assertNoProblems(syncode);
   signal('guest-done');
   await waitFor('host done', () => read('host-done'));
 }
 
 export async function run(): Promise<void> {
-  await vscode.workspace.getConfiguration('lanpair').update('displayName', role === 'host' ? 'Ana (host)' : 'Bia (guest)', vscode.ConfigurationTarget.Global);
+  await vscode.workspace.getConfiguration('syncode').update('displayName', role === 'host' ? 'Ana (host)' : 'Bia (guest)', vscode.ConfigurationTarget.Global);
   if (role === 'host') await disableFormatOnSave();
-  const lanpair = await api();
-  logOf = lanpair;
+  const syncode = await api();
+  logOf = syncode;
   step(`${vscode.env.appName} ${vscode.version}`);
-  if (role === 'host') await host(lanpair);
-  else await guest(lanpair);
+  if (role === 'host') await host(syncode);
+  else await guest(syncode);
   step('OK');
 }

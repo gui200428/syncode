@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { askIdentity, lanAddresses, readConfig } from '../config';
 import { advertise, browse, type DiscoveredSession } from '../discovery/mdns';
-import { remoteUri, SCHEME, type LanPairFs } from '../guest/LanPairFs';
+import { remoteUri, SCHEME, type SynCodeFs } from '../guest/SynCodeFs';
 import { MirrorDisk, type SyncResult } from '../guest/MirrorDisk';
 import { isOpenInEditor, MirrorWorkspace } from '../guest/MirrorWorkspace';
 import { JoinError, SessionClient } from '../guest/SessionClient';
@@ -49,7 +49,7 @@ type State =
       client: SessionClient;
       cursors: RemoteCursors;
       undo: LocalUndo;
-      /** Set in mirror mode; otherwise the session is shown through LanPairFs. */
+      /** Set in mirror mode; otherwise the session is shown through SynCodeFs. */
       mirror?: MirrorWorkspace;
       disposables: vscode.Disposable[];
     };
@@ -61,10 +61,10 @@ interface MirrorTarget extends JoinTarget {
 
 type GuestMode = 'virtual' | 'mirror';
 
-const LAST_ADDRESS_KEY = 'lanpair.lastAddress';
-const GUEST_MODE_KEY = 'lanpair.lastGuestMode';
-const secretKey = (sessionId: string) => `lanpair.join.${sessionId}`;
-const mirrorKey = (folder: string) => `lanpair.mirror.${folder}`;
+const LAST_ADDRESS_KEY = 'syncode.lastAddress';
+const GUEST_MODE_KEY = 'syncode.lastGuestMode';
+const secretKey = (sessionId: string) => `syncode.join.${sessionId}`;
+const mirrorKey = (folder: string) => `syncode.mirror.${folder}`;
 
 export function parseAddress(input: string): { host: string; port: number } | undefined {
   const m = /^\s*\[?([^\]\s]+?)\]?:(\d{1,5})\s*$/.exec(input);
@@ -94,12 +94,12 @@ export class SessionManager implements vscode.Disposable {
 
   constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly fs: LanPairFs,
+    private readonly fs: SynCodeFs,
     private readonly status: StatusBar,
     private readonly log: Logger,
   ) {
     this.configListener = vscode.workspace.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration('lanpair')) return;
+      if (!e.affectsConfiguration('syncode')) return;
       const config = readConfig();
       this.cursors?.setUser({ name: config.displayName, color: safeColor(config.color) });
       this.cursors?.setNameLabels(config.nameLabels);
@@ -147,12 +147,12 @@ export class SessionManager implements vscode.Disposable {
 
   async startHosting(options: { pin?: string } = {}): Promise<HostingInfo | undefined> {
     if (this.state.kind !== 'idle') {
-      void vscode.window.showWarningMessage('LanPair: a session is already running. Stop it first.');
+      void vscode.window.showWarningMessage('SynCode: a session is already running. Stop it first.');
       return undefined;
     }
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (!folder || folder.uri.scheme !== 'file') {
-      void vscode.window.showErrorMessage('LanPair: open a local folder to share it.');
+      void vscode.window.showErrorMessage('SynCode: open a local folder to share it.');
       return undefined;
     }
     if (!options.pin && !(await askIdentity())) return undefined;
@@ -179,7 +179,7 @@ export class SessionManager implements vscode.Disposable {
       });
     } catch (err) {
       docs.dispose();
-      void vscode.window.showErrorMessage(`LanPair: could not open port ${config.port}: ${message(err)}`);
+      void vscode.window.showErrorMessage(`SynCode: could not open port ${config.port}: ${message(err)}`);
       return undefined;
     }
 
@@ -235,12 +235,12 @@ export class SessionManager implements vscode.Disposable {
 
     if (!options.pin) {
       void vscode.window
-        .showInformationMessage(`LanPair: hosting on ${this.joinAddress(info)} — PIN ${pin}`, 'Copy Join Info')
+        .showInformationMessage(`SynCode: hosting on ${this.joinAddress(info)} — PIN ${pin}`, 'Copy Join Info')
         .then((action) => (action ? this.copyJoinInfo() : undefined));
       if (process.platform === 'win32') {
         void vscode.window.showInformationMessage(
-          'LanPair: if Windows asks about the firewall, allow access on private networks so guests can connect. ' +
-            'Set "lanpair.port" to keep the same port (and firewall rule) across sessions.',
+          'SynCode: if Windows asks about the firewall, allow access on private networks so guests can connect. ' +
+            'Set "syncode.port" to keep the same port (and firewall rule) across sessions.',
         );
       } else if (process.platform === 'linux' && ufwEnabled()) {
         void this.showUfwHint(info, config.port === 0);
@@ -251,16 +251,16 @@ export class SessionManager implements vscode.Disposable {
 
   private async showUfwHint(info: HostingInfo, randomPort: boolean): Promise<void> {
     const subnet = info.addresses[0] ? `${info.addresses[0].split('.').slice(0, 3).join('.')}.0/24` : 'any';
-    const command = `sudo ufw allow from ${subnet} to any port ${info.port} proto tcp comment LanPair`;
+    const command = `sudo ufw allow from ${subnet} to any port ${info.port} proto tcp comment SynCode`;
     const action = await vscode.window.showWarningMessage(
-      `LanPair: the ufw firewall is enabled and blocks incoming connections by default, so guests may get "No answer". ` +
+      `SynCode: the ufw firewall is enabled and blocks incoming connections by default, so guests may get "No answer". ` +
         `Allow the port with: ${command}` +
-        (randomPort ? ' — set "lanpair.port" to a fixed port first so the rule keeps working.' : ''),
+        (randomPort ? ' — set "syncode.port" to a fixed port first so the rule keeps working.' : ''),
       'Copy Command',
       ...(randomPort ? ['Open Settings'] : []),
     );
     if (action === 'Copy Command') await vscode.env.clipboard.writeText(command);
-    if (action === 'Open Settings') await vscode.commands.executeCommand('workbench.action.openSettings', 'lanpair.port');
+    if (action === 'Open Settings') await vscode.commands.executeCommand('workbench.action.openSettings', 'syncode.port');
   }
 
   /** Tells guests about files created, changed or deleted on the host (batched). */
@@ -298,11 +298,11 @@ export class SessionManager implements vscode.Disposable {
   async copyJoinInfo(): Promise<void> {
     const info = this.hostingInfo;
     if (!info) {
-      void vscode.window.showWarningMessage('LanPair: not hosting a session.');
+      void vscode.window.showWarningMessage('SynCode: not hosting a session.');
       return;
     }
-    await vscode.env.clipboard.writeText(`LanPair session: ${this.joinAddress(info)}  PIN: ${info.pin}`);
-    void vscode.window.showInformationMessage('LanPair: join info copied.');
+    await vscode.env.clipboard.writeText(`SynCode session: ${this.joinAddress(info)}  PIN: ${info.pin}`);
+    void vscode.window.showInformationMessage('SynCode: join info copied.');
   }
 
   // Joining
@@ -314,7 +314,7 @@ export class SessionManager implements vscode.Disposable {
    */
   async join(target?: JoinTarget, options: { inPlace?: boolean } = {}): Promise<boolean> {
     if (this.state.kind !== 'idle') {
-      void vscode.window.showWarningMessage('LanPair: a session is already running. Stop it first.');
+      void vscode.window.showWarningMessage('SynCode: a session is already running. Stop it first.');
       return false;
     }
     if (!target && !(await askIdentity())) return false;
@@ -323,7 +323,7 @@ export class SessionManager implements vscode.Disposable {
     let pin = target?.pin;
     for (;;) {
       pin ??= await vscode.window.showInputBox({
-        title: 'LanPair: Join Session',
+        title: 'SynCode: Join Session',
         prompt: `PIN shown by the host (${address.host}:${address.port})`,
         placeHolder: '6 digits',
         ignoreFocusOut: true,
@@ -336,11 +336,11 @@ export class SessionManager implements vscode.Disposable {
         client = await this.connect(joinTarget);
       } catch (err) {
         if (err instanceof JoinError && err.code === 'pin' && !target) {
-          void vscode.window.showWarningMessage(`LanPair: wrong PIN (${err.attemptsLeft} attempts left).`);
+          void vscode.window.showWarningMessage(`SynCode: wrong PIN (${err.attemptsLeft} attempts left).`);
           pin = undefined;
           continue;
         }
-        void vscode.window.showErrorMessage(`LanPair: ${message(err)}`);
+        void vscode.window.showErrorMessage(`SynCode: ${message(err)}`);
         return false;
       }
       await this.context.globalState.update(LAST_ADDRESS_KEY, `${address.host}:${address.port}`);
@@ -367,7 +367,7 @@ export class SessionManager implements vscode.Disposable {
     }
   }
 
-  /** On activation: reconnect if this window's workspace is a LanPair folder or a mirror. */
+  /** On activation: reconnect if this window's workspace is a SynCode folder or a mirror. */
   resumeFromWorkspace(): Promise<void> {
     const folder = vscode.workspace.workspaceFolders?.find((f) => f.uri.scheme === SCHEME);
     if (!folder) return this.resumeMirror();
@@ -381,11 +381,11 @@ export class SessionManager implements vscode.Disposable {
   }
 
   private async resume(sessionId: string): Promise<SessionClient | undefined> {
-    const stored = (await this.context.secrets.get(secretKey(sessionId))) ?? process.env.LANPAIR_TEST_JOIN;
+    const stored = (await this.context.secrets.get(secretKey(sessionId))) ?? process.env.SYNCODE_TEST_JOIN;
     if (!stored) {
       this.state = { kind: 'idle' };
       void vscode.window
-        .showErrorMessage('LanPair: this window shows a LanPair session but the join info is missing.', 'Join Session…', 'Close Folder')
+        .showErrorMessage('SynCode: this window shows a SynCode session but the join info is missing.', 'Join Session…', 'Close Folder')
         .then((a) => this.onResumeFailed(a));
       return undefined;
     }
@@ -398,7 +398,7 @@ export class SessionManager implements vscode.Disposable {
       this.state = { kind: 'idle' };
       this.status.update({ kind: 'idle' });
       void vscode.window
-        .showErrorMessage(`LanPair: could not reconnect: ${message(err)}`, 'Join Session…', 'Close Folder')
+        .showErrorMessage(`SynCode: could not reconnect: ${message(err)}`, 'Join Session…', 'Close Folder')
         .then((a) => this.onResumeFailed(a));
       return undefined;
     }
@@ -410,7 +410,7 @@ export class SessionManager implements vscode.Disposable {
       client.dispose();
       this.status.update({ kind: 'idle' });
       void vscode.window
-        .showWarningMessage(`LanPair: ${client.welcome.hostName} started a new session.`, 'Open New Session')
+        .showWarningMessage(`SynCode: ${client.welcome.hostName} started a new session.`, 'Open New Session')
         .then((action) =>
           action
             ? vscode.commands.executeCommand('vscode.openFolder', remoteUri(client.welcome.sessionId, ''), { forceNewWindow: false })
@@ -447,7 +447,7 @@ export class SessionManager implements vscode.Disposable {
     ];
     if (this.context.globalState.get<GuestMode>(GUEST_MODE_KEY) === 'mirror') items.reverse();
     const pick = await vscode.window.showQuickPick(items, {
-      title: `LanPair: Join "${rootName}"`,
+      title: `SynCode: Join "${rootName}"`,
       placeHolder: 'How do you want to open the shared folder?',
       ignoreFocusOut: true,
     });
@@ -462,13 +462,13 @@ export class SessionManager implements vscode.Disposable {
       canSelectFiles: false,
       canSelectMany: false,
       openLabel: 'Mirror Here',
-      title: `LanPair: folder for "${rootName}" (empty, or a clone of the same project)`,
+      title: `SynCode: folder for "${rootName}" (empty, or a clone of the same project)`,
       defaultUri: current?.scheme === 'file' ? current : undefined,
     });
     const folder = picked?.[0];
     if (!folder) return undefined;
     if (folder.fsPath === os.homedir() || path.parse(folder.fsPath).root === folder.fsPath) {
-      void vscode.window.showErrorMessage('LanPair: pick a project folder, not your home or root folder.');
+      void vscode.window.showErrorMessage('SynCode: pick a project folder, not your home or root folder.');
       return undefined;
     }
     return folder;
@@ -499,7 +499,7 @@ export class SessionManager implements vscode.Disposable {
     const folders = vscode.workspace.workspaceFolders ?? [];
     if (folders.length !== 1 || folders[0]!.uri.scheme !== 'file') return undefined;
     const root = folders[0]!.uri;
-    const stored = (await this.context.secrets.get(mirrorKey(root.fsPath))) ?? process.env.LANPAIR_TEST_MIRROR;
+    const stored = (await this.context.secrets.get(mirrorKey(root.fsPath))) ?? process.env.SYNCODE_TEST_MIRROR;
     return stored ? { root, target: JSON.parse(stored) as MirrorTarget } : undefined;
   }
 
@@ -513,7 +513,7 @@ export class SessionManager implements vscode.Disposable {
   async reconnectMirrorCommand(): Promise<void> {
     const mirror = this.state.kind === 'idle' ? await this.mirrorFolder() : undefined;
     if (!mirror) {
-      void vscode.window.showWarningMessage('LanPair: this window is not a mirror folder (or a session is running).');
+      void vscode.window.showWarningMessage('SynCode: this window is not a mirror folder (or a session is running).');
       return;
     }
     await this.reconnectMirror(mirror.root, mirror.target);
@@ -535,7 +535,7 @@ export class SessionManager implements vscode.Disposable {
         this.status.update({ kind: 'idle' });
         const wrongPin = err instanceof JoinError && err.code === 'pin';
         const action = await vscode.window.showWarningMessage(
-          `LanPair: could not reconnect this mirror to ${target.host}:${target.port}: ` +
+          `SynCode: could not reconnect this mirror to ${target.host}:${target.port}: ` +
             (wrongPin ? 'wrong PIN (the host may have started a new session).' : `${message(err)} The folder stays a local copy.`),
           wrongPin ? 'Enter PIN…' : 'Retry',
           'Stop Mirroring',
@@ -546,7 +546,7 @@ export class SessionManager implements vscode.Disposable {
         }
         if (action === 'Enter PIN…') {
           const pin = await vscode.window.showInputBox({
-            title: 'LanPair: Reconnect Mirror',
+            title: 'SynCode: Reconnect Mirror',
             prompt: `PIN shown by the host (${target.host}:${target.port})`,
             placeHolder: '6 digits',
             ignoreFocusOut: true,
@@ -569,7 +569,7 @@ export class SessionManager implements vscode.Disposable {
   private async confirmReplace(hostName: string, paths: string[]): Promise<boolean> {
     const shown = paths.slice(0, 8).join(', ') + (paths.length > 8 ? ` and ${paths.length - 8} more` : '');
     const pick = await vscode.window.showWarningMessage(
-      `LanPair: ${paths.length === 1 ? '1 file' : `${paths.length} files`} in this folder differ from ${hostName}'s version.`,
+      `SynCode: ${paths.length === 1 ? '1 file' : `${paths.length} files`} in this folder differ from ${hostName}'s version.`,
       {
         modal: true,
         detail: `${shown}\n\nReplace them with the host's files, or keep yours for now (the host's next change to a kept file replaces it).`,
@@ -597,14 +597,14 @@ export class SessionManager implements vscode.Disposable {
     this.becomeGuest(client, mirror);
     try {
       const result = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: `LanPair: mirroring "${client.welcome.rootName}"…` },
+        { location: vscode.ProgressLocation.Notification, title: `SynCode: mirroring "${client.welcome.rootName}"…` },
         () => mirror.start(),
       );
       log(`folder in sync (${result.written} written, ${result.deleted} deleted, ${result.kept} kept)`);
       return result;
     } catch (err) {
       if (this.state.kind === 'guest' && this.state.client === client) this.stop();
-      void vscode.window.showErrorMessage(`LanPair: could not mirror the shared folder: ${message(err)}`);
+      void vscode.window.showErrorMessage(`SynCode: could not mirror the shared folder: ${message(err)}`);
       return undefined;
     }
   }
@@ -652,7 +652,7 @@ export class SessionManager implements vscode.Disposable {
     const closed = client.onDidClose((reason) => {
       if (this.state.kind === 'guest' && this.state.client === client) {
         this.stop(reason);
-        void vscode.window.showWarningMessage(`LanPair: session ended (${reason}).`);
+        void vscode.window.showWarningMessage(`SynCode: session ended (${reason}).`);
       }
     });
     const undo = new LocalUndo(view, config.localUndo);
@@ -684,12 +684,12 @@ export class SessionManager implements vscode.Disposable {
   /** Opens a host file by path (also reachable through the Explorer). */
   async openRemoteFile(relPath?: string): Promise<vscode.TextEditor | undefined> {
     if (this.state.kind !== 'guest') {
-      void vscode.window.showWarningMessage('LanPair: join a session first.');
+      void vscode.window.showWarningMessage('SynCode: join a session first.');
       return undefined;
     }
     const client = this.state.client;
     relPath ??= await vscode.window.showInputBox({
-      title: `LanPair: Open file from ${client.welcome.rootName}`,
+      title: `SynCode: Open file from ${client.welcome.rootName}`,
       prompt: 'Path relative to the shared folder',
       placeHolder: 'src/index.ts',
       ignoreFocusOut: true,
@@ -701,7 +701,7 @@ export class SessionManager implements vscode.Disposable {
       const document = await vscode.workspace.openTextDocument(uri);
       return await vscode.window.showTextDocument(document, { preview: false });
     } catch (err) {
-      void vscode.window.showErrorMessage(`LanPair: ${message(err)}`);
+      void vscode.window.showErrorMessage(`SynCode: ${message(err)}`);
       return undefined;
     }
   }
@@ -709,7 +709,7 @@ export class SessionManager implements vscode.Disposable {
   async followParticipant(): Promise<void> {
     const cursors = this.cursors;
     if (!cursors) {
-      void vscode.window.showWarningMessage('LanPair: no session is running.');
+      void vscode.window.showWarningMessage('SynCode: no session is running.');
       return;
     }
     type Item = vscode.QuickPickItem & { clientId?: number };
@@ -720,56 +720,56 @@ export class SessionManager implements vscode.Disposable {
     }));
     if (cursors.followed) items.unshift({ label: '$(circle-slash) Stop Following' });
     if (items.length === 0) {
-      void vscode.window.showInformationMessage('LanPair: nobody else is in the session yet.');
+      void vscode.window.showInformationMessage('SynCode: nobody else is in the session yet.');
       return;
     }
-    const pick = await vscode.window.showQuickPick(items, { title: 'LanPair: Follow Participant' });
+    const pick = await vscode.window.showQuickPick(items, { title: 'SynCode: Follow Participant' });
     if (pick) cursors.follow(pick.clientId);
   }
 
   async showMenu(): Promise<void> {
     type Item = vscode.QuickPickItem & { command: string };
-    const follow: Item = { label: '$(eye) Follow Participant…', command: 'lanpair.followParticipant' };
-    const identity: Item = { label: '$(account) Set Name and Color…', command: 'lanpair.setIdentity', description: readConfig().displayName };
+    const follow: Item = { label: '$(eye) Follow Participant…', command: 'syncode.followParticipant' };
+    const identity: Item = { label: '$(account) Set Name and Color…', command: 'syncode.setIdentity', description: readConfig().displayName };
     const items: Item[] =
       this.state.kind === 'hosting'
         ? [
-            { label: '$(copy) Copy Join Info', command: 'lanpair.copyJoinInfo', description: this.joinAddress(this.state.info) },
+            { label: '$(copy) Copy Join Info', command: 'syncode.copyJoinInfo', description: this.joinAddress(this.state.info) },
             follow,
             identity,
-            { label: '$(debug-stop) Stop Session', command: 'lanpair.stopSession' },
+            { label: '$(debug-stop) Stop Session', command: 'syncode.stopSession' },
           ]
         : this.state.kind === 'guest'
           ? [
               follow,
-              { label: '$(go-to-file) Open Remote File…', command: 'lanpair.openRemoteFile' },
+              { label: '$(go-to-file) Open Remote File…', command: 'syncode.openRemoteFile' },
               identity,
               {
                 label: '$(debug-disconnect) Leave Session',
-                command: 'lanpair.stopSession',
+                command: 'syncode.stopSession',
                 description: this.state.mirror ? 'the folder keeps the files' : undefined,
               },
             ]
           : [
-              { label: '$(broadcast) Start Hosting', command: 'lanpair.startHosting' },
-              { label: '$(plug) Join Session…', command: 'lanpair.joinSession' },
-              ...((await this.mirrorFolder()) ? [{ label: '$(sync) Reconnect Mirror', command: 'lanpair.reconnectMirror' }] : []),
+              { label: '$(broadcast) Start Hosting', command: 'syncode.startHosting' },
+              { label: '$(plug) Join Session…', command: 'syncode.joinSession' },
+              ...((await this.mirrorFolder()) ? [{ label: '$(sync) Reconnect Mirror', command: 'syncode.reconnectMirror' }] : []),
               identity,
             ];
-    const pick = await vscode.window.showQuickPick(items, { title: 'LanPair' });
+    const pick = await vscode.window.showQuickPick(items, { title: 'SynCode' });
     if (pick) await vscode.commands.executeCommand(pick.command);
   }
 
   /**
    * Stop Session command: also forgets the guest's join info and closes the
-   * LanPair folder. A mirror folder stays open as a plain local copy.
+   * SynCode folder. A mirror folder stays open as a plain local copy.
    */
   async leave(): Promise<void> {
     const state = this.state;
     this.stop();
     if (state.kind === 'guest' && state.mirror) {
       await this.context.secrets.delete(mirrorKey(state.mirror.root.fsPath));
-      void vscode.window.showInformationMessage('LanPair: left the session. This folder keeps the files as a local copy.');
+      void vscode.window.showInformationMessage('SynCode: left the session. This folder keeps the files as a local copy.');
     } else if (state.kind === 'guest') {
       const sessionId = state.client.welcome.sessionId;
       await this.context.secrets.delete(secretKey(sessionId));
@@ -817,7 +817,7 @@ export class SessionManager implements vscode.Disposable {
       alwaysShow: true,
     };
     const pick = vscode.window.createQuickPick<Item>();
-    pick.title = 'LanPair: Join Session';
+    pick.title = 'SynCode: Join Session';
     pick.placeholder = 'Looking for sessions on your network…';
     pick.busy = true;
     pick.ignoreFocusOut = true;
@@ -827,7 +827,7 @@ export class SessionManager implements vscode.Disposable {
         const found: Item[] = sessions.map((s) => ({
           label: `$(broadcast) ${s.hostName}`,
           description: `${s.rootName} — ${s.address}:${s.port}`,
-          detail: s.protocol === PROTOCOL_VERSION ? undefined : '$(warning) Different LanPair version: update both machines',
+          detail: s.protocol === PROTOCOL_VERSION ? undefined : '$(warning) Different SynCode version: update both machines',
           session: s,
         }));
         pick.items = [...found, manual];
@@ -858,7 +858,7 @@ export class SessionManager implements vscode.Disposable {
         if (!item?.manual) return finish(undefined);
         browser.dispose();
         const input = await vscode.window.showInputBox({
-          title: 'LanPair: Join Session',
+          title: 'SynCode: Join Session',
           prompt: "Host address shown in the host's notification",
           placeHolder: '192.168.0.10:45123',
           value: this.context.globalState.get<string>(LAST_ADDRESS_KEY),

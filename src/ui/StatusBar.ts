@@ -17,34 +17,34 @@ export class StatusBar implements vscode.Disposable {
   update(state: StatusState): void {
     switch (state.kind) {
       case 'idle':
-        this.item.text = '$(broadcast) LanPair';
-        this.item.tooltip = 'LanPair: start hosting or join a session';
-        this.item.command = 'lanpair.showMenu';
+        this.item.text = '$(broadcast) SynCode';
+        this.item.tooltip = 'SynCode: start hosting or join a session';
+        this.item.command = 'syncode.showMenu';
         break;
       case 'hosting': {
         const guests = state.guests === 1 ? '1 guest' : `${state.guests} guests`;
-        this.item.text = `$(broadcast) LanPair: hosting (PIN ${state.pin}) · ${guests}${state.following ? ` · following ${state.following}` : ''}`;
+        this.item.text = `$(broadcast) SynCode: hosting (PIN ${state.pin}) · ${guests}${state.following ? ` · following ${state.following}` : ''}`;
         this.item.tooltip = 'Click for join info or to stop the session';
-        this.item.command = 'lanpair.showMenu';
+        this.item.command = 'syncode.showMenu';
         break;
       }
       case 'guest':
         if (state.reconnecting) {
-          this.item.text = `$(sync~spin) LanPair: reconnecting to ${state.hostName}…`;
+          this.item.text = `$(sync~spin) SynCode: reconnecting to ${state.hostName}…`;
           this.item.tooltip = 'Connection lost. Your edits are kept and merged when it comes back.';
-          this.item.command = 'lanpair.showMenu';
+          this.item.command = 'syncode.showMenu';
           break;
         }
-        this.item.text = `$(plug) LanPair: ${state.hostName} · ${state.rootName}${state.mirror ? ' (mirror)' : ''}${state.following ? ` · following ${state.following}` : ''}`;
+        this.item.text = `$(plug) SynCode: ${state.hostName} · ${state.rootName}${state.mirror ? ' (mirror)' : ''}${state.following ? ` · following ${state.following}` : ''}`;
         this.item.tooltip = state.mirror
           ? 'Mirroring the shared folder into this local folder. Click to follow a participant or leave the session'
           : 'Click to follow a participant or leave the session';
-        this.item.command = 'lanpair.showMenu';
+        this.item.command = 'syncode.showMenu';
         break;
       case 'connecting':
-        this.item.text = `$(sync~spin) LanPair: connecting to ${state.address}…`;
-        this.item.tooltip = 'LanPair is connecting to the host';
-        this.item.command = 'lanpair.showMenu';
+        this.item.text = `$(sync~spin) SynCode: connecting to ${state.address}…`;
+        this.item.tooltip = 'SynCode is connecting to the host';
+        this.item.command = 'syncode.showMenu';
         break;
     }
   }

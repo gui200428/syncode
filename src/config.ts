@@ -12,9 +12,9 @@ export const PALETTE: ReadonlyArray<{ name: string; color: string }> = [
   { name: 'Pink', color: '#ff79c6' },
 ];
 
-export interface LanPairConfig {
+export interface SynCodeConfig {
   displayName: string;
-  /** True when lanpair.color is set explicitly. */
+  /** True when syncode.color is set explicitly. */
   colorConfigured: boolean;
   nameLabels: 'always' | 'whileMoving' | 'never';
   color: string;
@@ -40,14 +40,14 @@ function colorFor(name: string): string {
   return PALETTE[h % PALETTE.length]!.color;
 }
 
-export function readConfig(): LanPairConfig {
-  const c = vscode.workspace.getConfiguration('lanpair');
+export function readConfig(): SynCodeConfig {
+  const c = vscode.workspace.getConfiguration('syncode');
   const displayName = c.get<string>('displayName')?.trim() || defaultName();
   return {
     displayName,
     color: c.get<string>('color')?.trim() || colorFor(displayName),
     colorConfigured: !!c.get<string>('color')?.trim(),
-    nameLabels: c.get<LanPairConfig['nameLabels']>('nameLabels') ?? 'always',
+    nameLabels: c.get<SynCodeConfig['nameLabels']>('nameLabels') ?? 'always',
     port: Math.max(0, Math.min(65535, c.get<number>('port') ?? 0)),
     exclude: c.get<string[]>('exclude') ?? [],
     respectGitignore: c.get<boolean>('respectGitignore') ?? true,
@@ -73,21 +73,21 @@ export function lanAddresses(): string[] {
 export async function askIdentity(options: { forceColor?: boolean } = {}): Promise<{ name: string; color: string } | undefined> {
   const config = readConfig();
   const name = await vscode.window.showInputBox({
-    title: 'LanPair: your name in the session',
+    title: 'SynCode: your name in the session',
     prompt: 'Shown next to your cursor for the other participants',
     value: config.displayName,
     ignoreFocusOut: true,
     validateInput: (v) => (v.trim().length === 0 ? 'Enter a name' : v.trim().length > 32 ? 'Use at most 32 characters' : undefined),
   });
   if (name === undefined) return undefined;
-  const settings = vscode.workspace.getConfiguration('lanpair');
+  const settings = vscode.workspace.getConfiguration('syncode');
   if (name.trim() !== config.displayName) await settings.update('displayName', name.trim(), vscode.ConfigurationTarget.Global);
 
   let color = config.colorConfigured ? config.color : colorFor(name.trim());
   if (!config.colorConfigured || options.forceColor) {
     const pick = await vscode.window.showQuickPick(
       PALETTE.map((p) => ({ label: p.name, description: p.color, picked: p.color === color, color: p.color })),
-      { title: 'LanPair: your cursor color', placeHolder: `Current: ${color}`, ignoreFocusOut: true },
+      { title: 'SynCode: your cursor color', placeHolder: `Current: ${color}`, ignoreFocusOut: true },
     );
     if (pick) {
       color = pick.color;

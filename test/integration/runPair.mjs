@@ -1,7 +1,7 @@
 // Runs pairSuite in two editor instances at once (host + guest on localhost).
 // With the argument `mirror`, runs mirrorSuite instead: the guest window is
 // opened on an empty local folder that it mirrors the host's folder into.
-// LANPAIR_PAIR_SECONDS controls the typing duration (default 120).
+// SYNCODE_PAIR_SECONDS controls the typing duration (default 120).
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -10,7 +10,7 @@ import * as esbuild from 'esbuild';
 import { runTests } from '@vscode/test-electron';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const editor = process.env.LANPAIR_EDITOR ?? '/opt/antigravity-ide/antigravity-ide';
+const editor = process.env.SYNCODE_EDITOR ?? '/opt/antigravity-ide/antigravity-ide';
 const mirror = process.argv[2] === 'mirror';
 const suite = mirror ? 'mirrorSuite' : 'pairSuite';
 
@@ -25,7 +25,7 @@ await esbuild.build({
   logLevel: 'warning',
 });
 
-const scratch = mkdtempSync(join(process.env.LANPAIR_TMP ?? tmpdir(), 'lanpair-pair-'));
+const scratch = mkdtempSync(join(process.env.SYNCODE_TMP ?? tmpdir(), 'syncode-pair-'));
 const pairDir = join(scratch, 'signals');
 mkdirSync(pairDir);
 const hostWorkspace = join(scratch, 'host-workspace');
@@ -53,9 +53,9 @@ function launch(role, workspace, extraEnv = {}) {
     launchArgs: [...workspace, ...args],
     extensionTestsEnv: {
       ...extraEnv,
-      LANPAIR_ROLE: role,
-      LANPAIR_PAIR_DIR: pairDir,
-      LANPAIR_PAIR_SECONDS: process.env.LANPAIR_PAIR_SECONDS ?? '120',
+      SYNCODE_ROLE: role,
+      SYNCODE_PAIR_DIR: pairDir,
+      SYNCODE_PAIR_SECONDS: process.env.SYNCODE_PAIR_SECONDS ?? '120',
     },
   });
 }
@@ -75,11 +75,11 @@ try {
       const mirrorDir = join(scratch, 'guest-mirror');
       mkdirSync(mirrorDir);
       return launch('guest', [mirrorDir], {
-        LANPAIR_TEST_MIRROR: JSON.stringify({ host: '127.0.0.1', port, pin: '424242', sessionId }),
+        SYNCODE_TEST_MIRROR: JSON.stringify({ host: '127.0.0.1', port, pin: '424242', sessionId }),
       });
     }
-    return launch('guest', ['--folder-uri', `lanpair://${sessionId}/`], {
-      LANPAIR_TEST_JOIN: JSON.stringify({ host: '127.0.0.1', port, pin: '424242' }),
+    return launch('guest', ['--folder-uri', `syncode://${sessionId}/`], {
+      SYNCODE_TEST_JOIN: JSON.stringify({ host: '127.0.0.1', port, pin: '424242' }),
     });
   })();
   const results = await Promise.allSettled([host, guest]);
@@ -91,5 +91,5 @@ try {
     console.log(`${mirror ? 'Mirror pair' : 'Pair'} test passed.`);
   }
 } finally {
-  if (!process.env.LANPAIR_KEEP) rmSync(scratch, { recursive: true, force: true });
+  if (!process.env.SYNCODE_KEEP) rmSync(scratch, { recursive: true, force: true });
 }

@@ -6,7 +6,7 @@ import type { DocLocator } from '../sync/RemoteCursors';
 import { bindableDocument } from '../sync/VscodeDocument';
 import type { SessionClient } from './SessionClient';
 
-export const SCHEME = 'lanpair';
+export const SCHEME = 'syncode';
 
 /** How long file operations wait for a (re)connection before failing. */
 const CONNECT_WAIT_MS = 20_000;
@@ -31,12 +31,12 @@ function toFsError(err: unknown, uri: vscode.Uri): Error {
 }
 
 /**
- * Guest view of the host's shared folder: `lanpair://<sessionId>/<path>`.
+ * Guest view of the host's shared folder: `syncode://<sessionId>/<path>`.
  * Text files are served from their synced Y.Text and every TextDocument opened
  * on them is bound to it; binary or oversized files are read-only copies.
  * Saving asks the host to write its own copy.
  */
-export class LanPairFs implements vscode.FileSystemProvider, DocLocator, vscode.Disposable {
+export class SynCodeFs implements vscode.FileSystemProvider, DocLocator, vscode.Disposable {
   private readonly changeEmitter = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
   readonly onDidChangeFile = this.changeEmitter.event;
   private readonly bindingsEmitter = new vscode.EventEmitter<void>();
@@ -206,7 +206,7 @@ export class LanPairFs implements vscode.FileSystemProvider, DocLocator, vscode.
       await Promise.race([this.waiting.promise, new Promise((r) => setTimeout(r, CONNECT_WAIT_MS))]);
     }
     if (!this.client || !this.client.isOpen || uri.authority !== this.sessionId) {
-      throw vscode.FileSystemError.Unavailable(`${uri.toString()}: not connected to this LanPair session`);
+      throw vscode.FileSystemError.Unavailable(`${uri.toString()}: not connected to this SynCode session`);
     }
     return this.client;
   }

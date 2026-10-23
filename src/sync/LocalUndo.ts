@@ -4,7 +4,7 @@ import { LineIndex, normalizeEol } from './document';
 import type { EditorBinding } from './EditorBinding';
 import type { DocLocator } from './RemoteCursors';
 
-const CONTEXT_KEY = 'lanpair.sharedEditor';
+const CONTEXT_KEY = 'syncode.sharedEditor';
 
 interface SelectionRel {
   anchor: Y.RelativePosition;
@@ -21,7 +21,7 @@ interface Tracked {
  * Undo/redo of this participant's own edits in shared documents, using
  * Y.UndoManager restricted to the binding's transaction origin. The native
  * editor undo would also revert other people's edits. Bound to Ctrl+Z /
- * Ctrl+Shift+Z / Ctrl+Y through the `lanpair.sharedEditor` context key.
+ * Ctrl+Shift+Z / Ctrl+Y through the `syncode.sharedEditor` context key.
  */
 export class LocalUndo implements vscode.Disposable {
   private readonly tracked = new Map<EditorBinding, Tracked>();

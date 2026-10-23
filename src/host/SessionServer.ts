@@ -257,7 +257,7 @@ export class SessionServer implements Disposable {
     if (hello.protocol !== PROTOCOL_VERSION) {
       this.reject(ws, {
         code: 'version',
-        message: `Protocol mismatch: host speaks v${PROTOCOL_VERSION}, guest v${hello.protocol}. Install the same LanPair version on both machines.`,
+        message: `Protocol mismatch: host speaks v${PROTOCOL_VERSION}, guest v${hello.protocol}. Install the same SynCode version on both machines.`,
       });
       return;
     }

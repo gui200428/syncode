@@ -1,14 +1,14 @@
 {
-  "name": "lanpair",
-  "displayName": "LanPair",
+  "name": "syncode",
+  "displayName": "SynCode",
   "description": "Real-time pair editing over the local network (Yjs CRDT, no cloud).",
   "version": "0.0.1",
-  "publisher": "lanpair",
+  "publisher": "syncode",
   "license": "MIT",
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://example.invalid/lanpair.git"
+    "url": "https://example.invalid/syncode.git"
   },
   "engines": {
     "vscode": "^1.107.0"
@@ -18,98 +18,98 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onFileSystem:lanpair",
+    "onFileSystem:syncode",
     "onStartupFinished"
   ],
   "contributes": {
     "commands": [
       {
-        "command": "lanpair.startHosting",
+        "command": "syncode.startHosting",
         "title": "Start Hosting",
-        "category": "LanPair"
+        "category": "SynCode"
       },
       {
-        "command": "lanpair.stopSession",
+        "command": "syncode.stopSession",
         "title": "Stop Session",
-        "category": "LanPair"
+        "category": "SynCode"
       },
       {
-        "command": "lanpair.joinSession",
+        "command": "syncode.joinSession",
         "title": "Join Session…",
-        "category": "LanPair"
+        "category": "SynCode"
       },
       {
-        "command": "lanpair.reconnectMirror",
+        "command": "syncode.reconnectMirror",
         "title": "Reconnect Mirror",
-        "category": "LanPair"
+        "category": "SynCode"
       },
       {
-        "command": "lanpair.copyJoinInfo",
+        "command": "syncode.copyJoinInfo",
         "title": "Copy Join Info",
-        "category": "LanPair"
+        "category": "SynCode"
       },
       {
-        "command": "lanpair.followParticipant",
+        "command": "syncode.followParticipant",
         "title": "Follow Participant",
-        "category": "LanPair"
+        "category": "SynCode"
       },
       {
-        "command": "lanpair.setIdentity",
+        "command": "syncode.setIdentity",
         "title": "Set Name and Color",
-        "category": "LanPair"
+        "category": "SynCode"
       },
       {
-        "command": "lanpair.openRemoteFile",
+        "command": "syncode.openRemoteFile",
         "title": "Open Remote File…",
-        "category": "LanPair"
+        "category": "SynCode"
       },
       {
-        "command": "lanpair.showMenu",
+        "command": "syncode.showMenu",
         "title": "Show Menu",
-        "category": "LanPair"
+        "category": "SynCode"
       },
       {
-        "command": "lanpair.hello",
+        "command": "syncode.hello",
         "title": "Hello",
-        "category": "LanPair"
+        "category": "SynCode"
       },
       {
-        "command": "lanpair.debugMirror",
+        "command": "syncode.debugMirror",
         "title": "Debug: Mirror Active Editor (toggle)",
-        "category": "LanPair"
+        "category": "SynCode"
       },
       {
-        "command": "lanpair.undo",
+        "command": "syncode.undo",
         "title": "Undo My Last Edit",
-        "category": "LanPair"
+        "category": "SynCode"
       },
       {
-        "command": "lanpair.redo",
+        "command": "syncode.redo",
         "title": "Redo My Last Edit",
-        "category": "LanPair"
+        "category": "SynCode"
       }
     ],
     "configuration": {
-      "title": "LanPair",
+      "title": "SynCode",
       "properties": {
-        "lanpair.displayName": {
+        "syncode.displayName": {
           "type": "string",
           "default": "",
           "description": "Name shown to other participants. Defaults to your user name."
         },
-        "lanpair.color": {
+        "syncode.color": {
           "type": "string",
           "default": "",
           "description": "Cursor color shown to others (CSS color). Defaults to a color derived from your name."
         },
-        "lanpair.port": {
+        "syncode.port": {
           "type": "integer",
           "default": 0,
           "minimum": 0,
           "maximum": 65535,
           "description": "Port the host listens on. 0 picks a free port each time; fix it to keep one firewall rule."
         },
-        "lanpair.exclude": {
+        "syncode.exclude": {
           "type": "array",
           "items": {
             "type": "string"
@@ -120,18 +120,18 @@
           ],
           "description": "Glob patterns of files that are not shared (in addition to .gitignore)."
         },
-        "lanpair.respectGitignore": {
+        "syncode.respectGitignore": {
           "type": "boolean",
           "default": true,
-          "description": "Hide files ignored by .gitignore from guests (as well as lanpair.exclude)."
+          "description": "Hide files ignored by .gitignore from guests (as well as syncode.exclude)."
         },
-        "lanpair.maxFileSizeKB": {
+        "syncode.maxFileSizeKB": {
           "type": "integer",
           "default": 2048,
           "minimum": 1,
           "description": "Largest text file that is synced, in KB."
         },
-        "lanpair.nameLabels": {
+        "syncode.nameLabels": {
           "type": "string",
           "enum": [
             "always",
@@ -146,12 +146,12 @@
           "default": "always",
           "description": "When to show participants' names above their cursors."
         },
-        "lanpair.advertise": {
+        "syncode.advertise": {
           "type": "boolean",
           "default": true,
           "description": "Announce hosted sessions on the local network (mDNS) so guests can pick them in Join Session."
         },
-        "lanpair.localUndo": {
+        "syncode.localUndo": {
           "type": "boolean",
           "default": true,
           "description": "In shared files, Ctrl+Z / Ctrl+Shift+Z undo and redo only your own edits (the editor's native undo would also revert other participants' edits)."
@@ -160,21 +160,21 @@
     },
     "keybindings": [
       {
-        "command": "lanpair.undo",
+        "command": "syncode.undo",
         "key": "ctrl+z",
         "mac": "cmd+z",
-        "when": "editorTextFocus && lanpair.sharedEditor && !editorReadonly"
+        "when": "editorTextFocus && syncode.sharedEditor && !editorReadonly"
       },
       {
-        "command": "lanpair.redo",
+        "command": "syncode.redo",
         "key": "ctrl+shift+z",
         "mac": "cmd+shift+z",
-        "when": "editorTextFocus && lanpair.sharedEditor && !editorReadonly"
+        "when": "editorTextFocus && syncode.sharedEditor && !editorReadonly"
       },
       {
-        "command": "lanpair.redo",
+        "command": "syncode.redo",
         "key": "ctrl+y",
-        "when": "editorTextFocus && lanpair.sharedEditor && !editorReadonly"
+        "when": "editorTextFocus && syncode.sharedEditor && !editorReadonly"
       }
     ]
   },
@@ -183,7 +183,7 @@
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "package": "npm run typecheck && node esbuild.mjs --production && vsce package --no-dependencies --out lanpair.vsix",
+    "package": "npm run typecheck && node esbuild.mjs --production && vsce package --no-dependencies --out syncode.vsix",
     "test:integration": "npm run build && node test/integration/runTest.mjs",
     "test:pair": "npm run build && node test/integration/runPair.mjs",
     "test:mirror": "npm run build && node test/integration/runPair.mjs mirror"

@@ -47,7 +47,7 @@ export class WorkspaceIndex {
     this.gitignores.clear();
   }
 
-  /** True if this exact path is excluded (by lanpair.exclude or .gitignore); parents are not checked. */
+  /** True if this exact path is excluded (by syncode.exclude or .gitignore); parents are not checked. */
   async isExcluded(relPath: string, isDirectory = false): Promise<boolean> {
     const rel = normalizeDocPath(relPath);
     if (rel === '') return false;
@@ -102,7 +102,7 @@ export class WorkspaceIndex {
     if (normalized.split('/').includes('..')) {
       throw new RemoteError('outside-root', 'path escapes the shared folder');
     }
-    // Excluded paths (lanpair.exclude, .gitignore) do not exist for guests.
+    // Excluded paths (syncode.exclude, .gitignore) do not exist for guests.
     if (await this.isHidden(normalized)) throw new RemoteError('not-found', `not found: ${normalized}`);
     const lexical = path.resolve(this.root, normalized);
     if (!isInside(path.resolve(this.root), lexical)) {

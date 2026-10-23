@@ -2,9 +2,9 @@ import * as vscode from 'vscode';
 
 const MAX_RECENT = 500;
 
-/** "LanPair" output channel that also keeps recent lines for diagnostics and tests. */
+/** "SynCode" output channel that also keeps recent lines for diagnostics and tests. */
 export class Logger implements vscode.Disposable {
-  private readonly channel = vscode.window.createOutputChannel('LanPair');
+  private readonly channel = vscode.window.createOutputChannel('SynCode');
   private readonly recent: string[] = [];
 
   appendLine(line: string): void {

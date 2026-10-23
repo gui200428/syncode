@@ -1,10 +1,10 @@
-# LanPair
+# SynCode
 
 Real-time pair editing for Antigravity / Code OSS over the local network.
 Two people on the same LAN edit the same files simultaneously and see each
 other's cursors. Built on Yjs (CRDT); no cloud server, no accounts, no internet.
 
-Status: Phase 5 (mirror mode: the guest can work on a local copy so its language servers work). See `PROMPT-claude-code-lanpair.md` for the roadmap.
+Status: Phase 5 (mirror mode: the guest can work on a local copy so its language servers work). See `PROMPT-claude-code-syncode.md` for the roadmap.
 
 ## Development
 
@@ -13,12 +13,12 @@ npm install
 npm run build     # bundle to dist/extension.js
 npm test          # vitest (pure logic)
 npm run test:integration  # runs inside the installed Antigravity (opens windows briefly)
-npm run test:pair         # host + guest Antigravity instances typing together (LANPAIR_PAIR_SECONDS, default 120)
+npm run test:pair         # host + guest Antigravity instances typing together (SYNCODE_PAIR_SECONDS, default 120)
 npm run test:mirror       # the same with the guest in mirror mode
-npm run package   # produce lanpair.vsix
+npm run package   # produce syncode.vsix
 ```
 
-Install in Antigravity: Extensions → ⋯ → Install from VSIX… → `lanpair.vsix`.
+Install in Antigravity: Extensions → ⋯ → Install from VSIX… → `syncode.vsix`.
 
 ## Sync core (Phase 1)
 
@@ -33,22 +33,22 @@ Install in Antigravity: Extensions → ⋯ → Install from VSIX… → `lanpair
   the edit (document version check) and it is retried.
 - `src/sync/DocRegistry.ts`: path → Y.Doc (ref counted) and the session Awareness.
 
-Manual check: open any file and run **LanPair: Debug: Mirror Active Editor
+Manual check: open any file and run **SynCode: Debug: Mirror Active Editor
 (toggle)**. A second editor opens beside it, joined through two Y.Docs with
 20–250 ms of artificial latency. Type in both at once; they must never diverge.
-Binding warnings go to the "LanPair" output channel.
+Binding warnings go to the "SynCode" output channel.
 
 ## Using it
 
-Host: open the folder to share, run **LanPair: Start Hosting**. A notification
+Host: open the folder to share, run **SynCode: Start Hosting**. A notification
 shows `IP:port` and a 6-digit PIN (also in the status bar; **Copy Join Info**).
 
 Both: Start Hosting and Join ask for the name (and, the first time, the color)
-shown next to your cursor; change it any time with **LanPair: Set Name and Color**.
+shown next to your cursor; change it any time with **SynCode: Set Name and Color**.
 
-Guest: run **LanPair: Join Session…** and pick the host from the list of
+Guest: run **SynCode: Join Session…** and pick the host from the list of
 sessions found on the network (mDNS), or enter `IP:port`; then type the PIN. The host's
-folder opens as `lanpair://<session>/` (in this window if it is empty,
+folder opens as `syncode://<session>/` (in this window if it is empty,
 otherwise in a new one) and the Explorer shows the host's files. Text files
 are edited live; binary or oversized files open read-only. Ctrl+S on the guest
 saves the file on the host (the host's save participants, such as format on
@@ -58,7 +58,7 @@ save, run there too).
 
 After the PIN, Join asks how to open the shared folder:
 
-- **Open the shared folder**: the `lanpair://` folder above. Nothing is written
+- **Open the shared folder**: the `syncode://` folder above. Nothing is written
   to the guest's disk, but language servers (IntelliSense, go to definition,
   diagnostics), terminals and tools do not work on it.
 - **Mirror into a local folder**: pick a folder (empty, or a clone of the same
@@ -78,9 +78,9 @@ How the mirror stays in sync:
   the host saves the guest's copy (save participants such as format on save
   run on the side that saves).
 - If files in the folder differ from the host's and were not written by
-  LanPair (first mirror into a clone, or local changes), you are asked whether
+  SynCode (first mirror into a clone, or local changes), you are asked whether
   to replace them or keep yours. Files changed on the guest are never deleted.
-  LanPair remembers what it wrote in its own storage, not in the folder.
+  SynCode remembers what it wrote in its own storage, not in the folder.
 - The window reconnects when the folder is opened again (join info is kept in
   the editor's secret storage). If the host started a new session, enter the
   new PIN. **Leave Session** stops mirroring; the files stay as a local copy.
@@ -88,16 +88,16 @@ How the mirror stays in sync:
   absolute paths, no symbolic links leaving the folder, never inside `.git`.
 
 Both sides see each other's cursors and selections, with the name floating
-above the cursor (`lanpair.nameLabels`: always / whileMoving / never).
+above the cursor (`syncode.nameLabels`: always / whileMoving / never).
 In shared files Ctrl+Z / Ctrl+Shift+Z undo and redo only your own edits
-(`lanpair.localUndo`).
+(`syncode.localUndo`).
 
 If the connection drops, the guest keeps editing and reconnects on its own
 (1 s → 10 s backoff, heartbeat every 10 s); edits made meanwhile on both
 sides are merged. Files changed on the host's disk (git checkout, external
 formatter) reach the guest as a minimal change, so cursors elsewhere stay put.
-Files ignored by `.gitignore` or `lanpair.exclude` are invisible to guests.
-**LanPair: Follow Participant** follows someone's file and cursor until you
+Files ignored by `.gitignore` or `syncode.exclude` are invisible to guests.
+**SynCode: Follow Participant** follows someone's file and cursor until you
 move your own cursor. Click the status bar item for the session menu.
 
 Protocol: one WebSocket per guest, binary frames `{type, docId, payload}`
@@ -109,9 +109,9 @@ symbolic links leaving the shared folder (`src/host/WorkspaceIndex.ts`).
 ## Known limitations
 
 - Undo via the Edit menu still uses the editor's native stack (only the
-  keyboard shortcuts are redirected to LanPair's own-edits undo).
+  keyboard shortcuts are redirected to SynCode's own-edits undo).
 - Linux hosts with ufw (or firewalld) must allow the port; the host shows the
-  `ufw allow` command. Fix `lanpair.port` so the rule keeps working.
+  `ufw allow` command. Fix `syncode.port` so the rule keeps working.
 - If the host's file changes on disk while the host has unsaved session edits,
   the editor keeps the session text (like VS Code does for any dirty file).
 - The guest cannot create, rename or delete shared files. In mirror mode, files

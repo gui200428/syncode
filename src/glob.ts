@@ -1,5 +1,5 @@
 /**
- * Minimal glob matching for `lanpair.exclude` (no dependency): `**` matches any
+ * Minimal glob matching for `syncode.exclude` (no dependency): `**` matches any
  * number of path segments, `*` and `?` stay within a segment, `{a,b}` is an
  * alternation. Paths use `/` and are relative to the shared folder.
  */

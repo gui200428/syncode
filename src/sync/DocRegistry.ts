@@ -7,7 +7,7 @@ import { normalizeEol, type Disposable } from './document';
 export const TEXT_KEY = 'content';
 
 /** Transaction origin for content loaded from or detected on disk. */
-export const DISK_ORIGIN = Symbol('lanpair-disk');
+export const DISK_ORIGIN = Symbol('syncode-disk');
 
 export interface DocEntry {
   readonly path: string;

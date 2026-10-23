@@ -4,7 +4,7 @@
  */
 import * as assert from 'node:assert/strict';
 import * as vscode from 'vscode';
-import type { LanPairApi } from '../../src/extension';
+import type { SynCodeApi } from '../../src/extension';
 
 type Test = { name: string; fn: () => Promise<void> };
 const tests: Test[] = [];
@@ -19,8 +19,8 @@ function fixture(name: string): vscode.Uri {
   return vscode.Uri.joinPath(root, name);
 }
 
-async function api(): Promise<LanPairApi> {
-  const ext = vscode.extensions.getExtension<LanPairApi>('lanpair.lanpair');
+async function api(): Promise<SynCodeApi> {
+  const ext = vscode.extensions.getExtension<SynCodeApi>('syncode.syncode');
   assert.ok(ext, 'extension not found');
   return ext.activate();
 }
@@ -95,14 +95,14 @@ async function stressMirror(file: string, iterations: number, seed: number): Pro
   const source = await vscode.workspace.openTextDocument(fixture(file));
   await vscode.window.showTextDocument(source, vscode.ViewColumn.One);
   const logStart = logs.recentLogLines().length;
-  await vscode.commands.executeCommand('lanpair.debugMirror');
+  await vscode.commands.executeCommand('syncode.debugMirror');
   const target = vscode.window.activeTextEditor!.document;
   assert.notEqual(target, source, 'mirror did not open a new editor');
   try {
     await waitFor(() => lf(target.getText()) === lf(source.getText()), 5000);
     await stress();
   } finally {
-    await vscode.commands.executeCommand('lanpair.debugMirror'); // stop
+    await vscode.commands.executeCommand('syncode.debugMirror'); // stop
     for (const d of [target, source]) {
       await vscode.window.showTextDocument(d);
       await vscode.commands.executeCommand('workbench.action.revertAndCloseActiveEditor');
@@ -181,7 +181,7 @@ test('mirror converges under concurrent edits (CRLF source)', async () => {
 });
 
 export async function run(): Promise<void> {
-  console.log(`LanPair integration tests on ${vscode.env.appName} ${vscode.version}`);
+  console.log(`SynCode integration tests on ${vscode.env.appName} ${vscode.version}`);
   const failures: string[] = [];
   for (const t of tests) {
     try {

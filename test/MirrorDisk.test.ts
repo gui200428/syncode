@@ -42,7 +42,7 @@ describe('MirrorDisk', () => {
   }
 
   beforeEach(() => {
-    base = mkdtempSync(join(tmpdir(), 'lanpair-mirror-'));
+    base = mkdtempSync(join(tmpdir(), 'syncode-mirror-'));
     hostRoot = join(base, 'host');
     local = join(base, 'local');
     manifest = join(base, 'state', 'manifest.json');

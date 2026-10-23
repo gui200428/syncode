@@ -23,7 +23,7 @@ describe('reconnection', () => {
   });
 
   async function setup(port = 0, sessionId = 'sess0001') {
-    const root = mkdtempSync(join(tmpdir(), 'lanpair-reconnect-'));
+    const root = mkdtempSync(join(tmpdir(), 'syncode-reconnect-'));
     writeFileSync(join(root, 'a.txt'), 'hello world\n');
     // Like the real host, keep documents for the whole session.
     const host = folderHostDocs(root, undefined, [], { retain: true });
@@ -54,7 +54,7 @@ describe('reconnection', () => {
       color: '#0f0',
       backoffMs: [50, 100],
       deadAfterMs: 400,
-      log: (m) => process.env.LANPAIR_DEBUG && console.log('[client]', m),
+      log: (m) => process.env.SYNCODE_DEBUG && console.log('[client]', m),
     });
     cleanup.push(() => c.dispose());
     return c;
@@ -115,7 +115,7 @@ describe('reconnection', () => {
   });
 
   it('ends the session instead of merging into a recreated document', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'lanpair-reconnect-'));
+    const root = mkdtempSync(join(tmpdir(), 'syncode-reconnect-'));
     writeFileSync(join(root, 'a.txt'), 'abc');
     const host = folderHostDocs(root); // no retain: the doc is recreated
     const server = await SessionServer.start({

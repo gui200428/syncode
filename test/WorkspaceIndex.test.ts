@@ -10,7 +10,7 @@ describe('WorkspaceIndex', () => {
   let index: WorkspaceIndex;
 
   beforeAll(() => {
-    base = mkdtempSync(join(tmpdir(), 'lanpair-wi-'));
+    base = mkdtempSync(join(tmpdir(), 'syncode-wi-'));
     root = join(base, 'root');
     mkdirSync(join(root, 'src'), { recursive: true });
     writeFileSync(join(root, 'src', 'a.ts'), 'export {};\n');
@@ -24,7 +24,7 @@ describe('WorkspaceIndex', () => {
     index = new WorkspaceIndex(root, { maxFileBytes: 1024 });
   });
 
-  it('hides files ignored by .gitignore files (root and nested) and lanpair.exclude', async () => {
+  it('hides files ignored by .gitignore files (root and nested) and syncode.exclude', async () => {
     const r = join(base, 'git');
     mkdirSync(join(r, 'dist'), { recursive: true });
     mkdirSync(join(r, 'pkg', 'gen'), { recursive: true });
@@ -37,7 +37,7 @@ describe('WorkspaceIndex', () => {
     for (const hidden of ['dist/out.js', 'a.log', 'pkg/gen/x.ts', 'notes.tmp']) {
       await expect(gi.resolve(hidden)).rejects.toMatchObject({ code: 'not-found' });
     }
-    // Disabled: only lanpair.exclude applies.
+    // Disabled: only syncode.exclude applies.
     const plain = new WorkspaceIndex(r, { maxFileBytes: 1024, exclude: ['*.tmp'], respectGitignore: false });
     expect((await plain.list('')).map((e) => e[0])).toContain('dist');
     // Edits to .gitignore apply after invalidation.

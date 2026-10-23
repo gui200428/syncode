@@ -2,8 +2,8 @@ import { Bonjour, type Service } from 'bonjour-service';
 import { PROTOCOL_VERSION } from '../protocol';
 import type { Disposable } from '../sync/document';
 
-/** DNS-SD service type: _lanpair._tcp.local */
-export const SERVICE_TYPE = 'lanpair';
+/** DNS-SD service type: _syncode._tcp.local */
+export const SERVICE_TYPE = 'syncode';
 
 export interface AdvertisedSession {
   sessionId: string;
