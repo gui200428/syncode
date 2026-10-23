@@ -1,6 +1,6 @@
 // Runs pairSuite in two editor instances at once (host + guest on localhost).
 // LANPAIR_PAIR_SECONDS controls the typing duration (default 120).
-import { cpSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,8 +26,12 @@ const pairDir = join(scratch, 'signals');
 mkdirSync(pairDir);
 const hostWorkspace = join(scratch, 'host-workspace');
 cpSync(join(root, 'test/integration/pair-fixture'), hostWorkspace, { recursive: true });
+// Created here because the repository's .gitignore would drop them from the fixture.
+mkdirSync(join(hostWorkspace, 'node_modules'));
+writeFileSync(join(hostWorkspace, 'node_modules', 'dep.js'), 'module.exports = 1;\n');
+writeFileSync(join(hostWorkspace, 'image.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]));
 
-function launch(role, workspace) {
+function launch(role, workspace, extraEnv = {}) {
   const args = [
     '--disable-extensions',
     '--disable-workspace-trust',
@@ -42,8 +46,9 @@ function launch(role, workspace) {
     vscodeExecutablePath: editor,
     extensionDevelopmentPath: root,
     extensionTestsPath: join(root, 'out-test/pairSuite.js'),
-    launchArgs: workspace ? [workspace, ...args] : args,
+    launchArgs: [...workspace, ...args],
     extensionTestsEnv: {
+      ...extraEnv,
       LANPAIR_ROLE: role,
       LANPAIR_PAIR_DIR: pairDir,
       LANPAIR_PAIR_SECONDS: process.env.LANPAIR_PAIR_SECONDS ?? '120',
@@ -52,7 +57,21 @@ function launch(role, workspace) {
 }
 
 try {
-  const results = await Promise.allSettled([launch('host', hostWorkspace), launch('guest')]);
+  const host = launch('host', [hostWorkspace]);
+  // The guest opens the host's folder directly, like after "Join Session".
+  const signal = join(pairDir, 'host.json');
+  const guest = (async () => {
+    const start = Date.now();
+    while (!existsSync(signal)) {
+      if (Date.now() - start > 120_000) throw new Error('host did not start');
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    const { port, sessionId } = JSON.parse(readFileSync(signal, 'utf8'));
+    return launch('guest', ['--folder-uri', `lanpair://${sessionId}/`], {
+      LANPAIR_TEST_JOIN: JSON.stringify({ host: '127.0.0.1', port, pin: '424242' }),
+    });
+  })();
+  const results = await Promise.allSettled([host, guest]);
   const failed = results.filter((r) => r.status === 'rejected');
   if (failed.length) {
     console.error('Pair test failed:', failed.map((r) => String(r.reason)).join('; '));
